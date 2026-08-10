@@ -3,6 +3,8 @@
 # ============================================================
 build/
 build-opencv/
+build-win/
+build-win-opencv/
 cmake-build-*/
 cmake-build-*/
 CMakeCache.txt

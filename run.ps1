@@ -4,7 +4,10 @@ param(
 
     [Parameter(Position = 1)]
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
-    [string]$Config = "Debug"
+    [string]$Config = "Debug",
+
+    [Parameter(Position = 2, ValueFromRemainingArguments = $true)]
+    [string[]]$ProgramArgs
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,4 +29,4 @@ if (-not (Test-Path -LiteralPath $ExePath)) {
 }
 
 $env:Path = "$OpenCvBin;$env:Path"
-& $ExePath
+& $ExePath @ProgramArgs

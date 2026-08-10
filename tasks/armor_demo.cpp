@@ -1,3 +1,4 @@
+//题目2
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -26,7 +27,7 @@ namespace fs = std::filesystem;
 struct DemoOptions
 {
   std::string source;
-  std::string template_directory;
+  std::string model_path;
   int brightness_threshold = 150;
   bool headless = false;
   bool has_max_frames = false;
@@ -71,18 +72,18 @@ DemoOptions parse_options(int argc, char ** argv)
 {
   DemoOptions options;
   const fs::path repo_root = fs::current_path();
-  options.source = join_path(repo_root, fs::path("learning/assets/demo/demo.avi"));
-  options.template_directory = join_path(repo_root, fs::path("learning/assets/demo/templates"));
+  options.source = "0";
+  options.model_path = join_path(repo_root, fs::path("learning/assets/tiny_resnet.onnx"));
 
   std::vector<std::string> positional;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
     if (argument == "-h" || argument == "--help") {
-      std::cout << "Usage: armor_demo [--headless] [--max-frames N] [source] [template_dir] [brightness_threshold]\n"
+      std::cout << "Usage: armor_demo [--headless] [--max-frames N] [source] [model_path] [brightness_threshold]\n"
                    "  --headless: disable GUI and print a summary on exit\n"
                    "  --max-frames N: stop after processing N frames in headless mode\n"
                    "  source: video file, camera index, or RTSP/HTTP URL\n"
-                   "  template_dir: optional directory containing digit templates\n"
+                   "  model_path: optional OpenCV DNN ONNX digit classifier path\n"
                    "  brightness_threshold: optional integer, default 150\n";
       std::exit(0);
     }
@@ -115,7 +116,7 @@ DemoOptions parse_options(int argc, char ** argv)
     if (second_is_threshold) {
       parse_int(positional[1], options.brightness_threshold);
     } else {
-      options.template_directory = positional[1];
+      options.model_path = positional[1];
       if (positional.size() >= 3U) {
         parse_int(positional[2], options.brightness_threshold);
       }
@@ -190,40 +191,147 @@ std::string source_label(const std::string & source)
   return source;
 }
 
-}  // namespace
-
-int main(int argc, char ** argv)
+bool open_camera(cv::VideoCapture & capture, int preferred_index, int & opened_index)
 {
-  const DemoOptions options = parse_options(argc, argv);
-
-  rm_assessment::ArmorDetector::Params detector_params;
-  detector_params.brightness_threshold = options.brightness_threshold;
-  rm_assessment::ArmorDetector detector(detector_params);
-  rm_assessment::DigitRecognizer recognizer(options.template_directory);
-  rm_assessment::Tracker tracker;
-
-  cv::VideoCapture capture;
-  if (looks_like_integer(options.source)) {
-    capture.open(std::stoi(options.source));
-  } else {
-    capture.open(options.source);
+  std::vector<int> indices = {preferred_index};
+  for (int index = 0; index <= 5; ++index) {
+    if (index != preferred_index) {
+      indices.push_back(index);
+    }
   }
 
-  if (!capture.isOpened()) {
-    std::cerr << "Failed to open source: " << options.source << '\n';
-    return 1;
-  }
+#ifdef _WIN32
+  const std::vector<int> backends = {cv::CAP_MSMF};
+#else
+  const std::vector<int> backends = {cv::CAP_ANY};
+#endif
 
-  auto last_tick = std::chrono::steady_clock::now();
+  for (const int index : indices) {
+    for (const int backend : backends) {
+      capture.release();
+      if (capture.open(index, backend)) {
+        opened_index = index;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+struct DemoState
+{
+  std::chrono::steady_clock::time_point last_tick = std::chrono::steady_clock::now();
   double fps = 0.0;
   std::size_t frame_index = 0U;
   std::size_t total_candidate_detections = 0U;
   std::size_t frames_with_tracker_target = 0U;
   std::size_t reliable_recognitions = 0U;
+};
+
+void process_frame(cv::Mat & frame, const DemoOptions & options, rm_assessment::ArmorDetector & detector,
+                   rm_assessment::DigitRecognizer & recognizer, rm_assessment::Tracker & tracker, DemoState & state,
+                   bool draw_gui)
+{
+  std::vector<rm_assessment::ArmorCandidate> armors = detector.detect(frame);
+  state.total_candidate_detections += armors.size();
+  const bool tracked = tracker.update(armors, frame.size());
+  if (tracked && tracker.has_target()) {
+    ++state.frames_with_tracker_target;
+  }
+
+  for (auto & armor : armors) {
+    const auto recognition = recognizer.recognize(armor);
+    if (recognition.reliable) {
+      ++state.reliable_recognitions;
+    }
+
+    if (draw_gui) {
+      const cv::Scalar text_color = recognition.reliable ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 255);
+      draw_candidate(frame, armor);
+
+      const cv::Rect text_box = armor.bounding_box;
+      std::ostringstream label;
+      label << recognition.label << " " << std::fixed << std::setprecision(2) << recognition.confidence;
+      cv::putText(frame, label.str(), {text_box.x, std::max(18, text_box.y - 6)}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                  text_color, 1, cv::LINE_AA);
+    }
+  }
+
+  if (draw_gui) {
+    draw_tracker(frame, tracker);
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(now - state.last_tick).count();
+  if (elapsed > 0.0) {
+    state.fps = 1.0 / elapsed;
+  }
+  state.last_tick = now;
+
+  if (draw_gui) {
+    std::ostringstream hud;
+    hud << source_label(options.source) << " | model: " << (recognizer.has_model() ? "loaded" : "missing")
+        << " | thresh: " << options.brightness_threshold << " | fps: " << format_fps(state.fps)
+        << " | frame: " << state.frame_index << " | tracker: " << tracker.state();
+    cv::putText(frame, hud.str(), {12, 28}, cv::FONT_HERSHEY_SIMPLEX, 0.6, {255, 255, 255}, 2, cv::LINE_AA);
+    cv::putText(frame, "q/Esc to exit", {12, 56}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 2, cv::LINE_AA);
+  }
+
+  ++state.frame_index;
+}
+
+}  // namespace
+
+int main(int argc, char ** argv)
+{
+  DemoOptions options = parse_options(argc, argv);
+
+  rm_assessment::ArmorDetector::Params detector_params;
+  detector_params.brightness_threshold = options.brightness_threshold;
+  rm_assessment::ArmorDetector detector(detector_params);
+  rm_assessment::DigitRecognizer recognizer(options.model_path);
+  rm_assessment::Tracker tracker;
+
+  cv::VideoCapture capture;
+  if (looks_like_integer(options.source)) {
+    const int preferred_index = std::stoi(options.source);
+    int opened_index = preferred_index;
+    if (open_camera(capture, preferred_index, opened_index)) {
+      options.source = std::to_string(opened_index);
+    }
+  } else {
+    capture.open(options.source);
+  }
+
+  if (!capture.isOpened()) {
+    if (looks_like_integer(options.source)) {
+      std::cerr << "No available camera was found (checked indices 0-5).\n"
+                   "Check the camera privacy switch, Windows camera permissions, and Device Manager.\n";
+    } else {
+      std::cerr << "Failed to open source: " << options.source << '\n';
+    }
+    return 1;
+  }
+
+  std::cout << "Opened source: " << options.source << '\n';
+  std::cout << "Digit model: " << options.model_path << " (" << (recognizer.has_model() ? "loaded" : "missing") << ")\n";
+
+  DemoState state;
 
   if (!options.headless) {
     const std::string window_name = "armor_demo";
     cv::namedWindow(window_name, cv::WINDOW_NORMAL);
+    cv::resizeWindow(window_name, 1280, 720);
+    cv::moveWindow(window_name, 40, 40);
+    cv::setWindowProperty(window_name, cv::WND_PROP_TOPMOST, 1.0);
+
+    int frame_delay_ms = 1;
+    if (!looks_like_integer(options.source)) {
+      const double source_fps = capture.get(cv::CAP_PROP_FPS);
+      if (source_fps > 1.0 && source_fps <= 240.0) {
+        frame_delay_ms = std::clamp(static_cast<int>(1000.0 / source_fps), 1, 1000);
+      }
+    }
 
     for (;;) {
       cv::Mat frame;
@@ -235,53 +343,17 @@ int main(int argc, char ** argv)
         break;
       }
 
-      std::vector<rm_assessment::ArmorCandidate> armors = detector.detect(frame);
-      total_candidate_detections += armors.size();
-      const bool tracked = tracker.update(armors, frame.size());
-      if (tracked && tracker.has_target()) {
-        ++frames_with_tracker_target;
-      }
-
-      for (auto & armor : armors) {
-        const auto recognition = recognizer.recognize(armor);
-        if (recognition.reliable) {
-          ++reliable_recognitions;
-        }
-        const cv::Scalar text_color = recognition.reliable ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 255, 255);
-        draw_candidate(frame, armor);
-
-        const cv::Rect text_box = armor.bounding_box;
-        std::ostringstream label;
-        label << recognition.label << " " << std::fixed << std::setprecision(2) << recognition.confidence;
-        cv::putText(frame, label.str(), {text_box.x, std::max(18, text_box.y - 6)}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                    text_color, 1, cv::LINE_AA);
-      }
-
-      draw_tracker(frame, tracker);
-
-      const auto now = std::chrono::steady_clock::now();
-      const double elapsed = std::chrono::duration<double>(now - last_tick).count();
-      if (elapsed > 0.0) {
-        fps = 1.0 / elapsed;
-      }
-      last_tick = now;
-
-      std::ostringstream hud;
-      hud << source_label(options.source) << " | templates: " << (recognizer.has_templates() ? "loaded" : "none")
-          << " | thresh: " << options.brightness_threshold << " | fps: " << format_fps(fps)
-          << " | frame: " << frame_index++ << " | tracker: " << tracker.state();
-      cv::putText(frame, hud.str(), {12, 28}, cv::FONT_HERSHEY_SIMPLEX, 0.6, {255, 255, 255}, 2, cv::LINE_AA);
-      cv::putText(frame, "q/Esc to exit", {12, 56}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 2, cv::LINE_AA);
+      process_frame(frame, options, detector, recognizer, tracker, state, true);
 
       cv::imshow(window_name, frame);
-      const int key = cv::waitKey(1);
+      const int key = cv::waitKey(frame_delay_ms);
       if (key == 27 || key == 'q' || key == 'Q') {
         break;
       }
     }
   } else {
     for (;;) {
-      if (options.has_max_frames && frame_index >= options.max_frames) {
+      if (options.has_max_frames && state.frame_index >= options.max_frames) {
         break;
       }
 
@@ -290,32 +362,12 @@ int main(int argc, char ** argv)
         break;
       }
 
-      std::vector<rm_assessment::ArmorCandidate> armors = detector.detect(frame);
-      total_candidate_detections += armors.size();
-      const bool tracked = tracker.update(armors, frame.size());
-      if (tracked && tracker.has_target()) {
-        ++frames_with_tracker_target;
-      }
-
-      for (const auto & armor : armors) {
-        const auto recognition = recognizer.recognize(armor);
-        if (recognition.reliable) {
-          ++reliable_recognitions;
-        }
-      }
-
-      const auto now = std::chrono::steady_clock::now();
-      const double elapsed = std::chrono::duration<double>(now - last_tick).count();
-      if (elapsed > 0.0) {
-        fps = 1.0 / elapsed;
-      }
-      last_tick = now;
-      ++frame_index;
+      process_frame(frame, options, detector, recognizer, tracker, state, false);
     }
 
-    std::cout << "frames=" << frame_index << " candidates=" << total_candidate_detections
-              << " tracker_frames=" << frames_with_tracker_target
-              << " reliable_recognitions=" << reliable_recognitions << '\n';
+    std::cout << "frames=" << state.frame_index << " candidates=" << state.total_candidate_detections
+              << " tracker_frames=" << state.frames_with_tracker_target
+              << " reliable_recognitions=" << state.reliable_recognitions << '\n';
   }
 
   return 0;

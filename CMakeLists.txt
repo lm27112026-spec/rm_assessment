@@ -37,6 +37,9 @@ if(OpenCV_FOUND)
 
   add_executable(armor_demo tasks/armor_demo.cpp)
   target_link_libraries(armor_demo PRIVATE armor_vision)
+
+  add_executable(armor_vision_test tests/armor_vision_test.cpp)
+  target_link_libraries(armor_vision_test PRIVATE armor_vision)
 else()
   message(STATUS "OpenCV not found: skipping armor_vision library and armor_demo executable.")
 endif()
@@ -44,3 +47,13 @@ endif()
 enable_testing()
 add_test(NAME mycamera_test COMMAND mycamera_test)
 set_tests_properties(mycamera_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(OpenCV_FOUND)
+  add_test(NAME armor_vision_test COMMAND armor_vision_test)
+  set_tests_properties(armor_vision_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  if(WIN32 AND DEFINED OpenCV_DIR)
+    get_filename_component(OpenCV_BIN_DIR "${OpenCV_DIR}/x64/vc16/bin" ABSOLUTE)
+    set_tests_properties(armor_vision_test PROPERTIES
+      ENVIRONMENT "PATH=${OpenCV_BIN_DIR};$ENV{PATH}")
+  endif()
+endif()
