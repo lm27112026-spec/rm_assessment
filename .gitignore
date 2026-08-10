@@ -2,6 +2,7 @@
 # Build Artifacts
 # ============================================================
 build/
+build-opencv/
 cmake-build-*/
 cmake-build-*/
 CMakeCache.txt
