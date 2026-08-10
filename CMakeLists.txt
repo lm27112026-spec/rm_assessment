@@ -25,6 +25,22 @@ endfunction()
 add_standalone_cpp(example io/example.cpp)
 add_standalone_cpp(mycamera_test tests/myCamera_test.cpp)
 
+if(OpenCV_FOUND)
+  add_library(armor_vision
+    src/armor.cpp
+    src/detector.cpp
+    src/digit_recognizer.cpp
+    src/tracker.cpp)
+  target_include_directories(armor_vision PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+  target_include_directories(armor_vision PUBLIC ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(armor_vision PUBLIC ${OpenCV_LIBS})
+
+  add_executable(armor_demo tasks/armor_demo.cpp)
+  target_link_libraries(armor_demo PRIVATE armor_vision)
+else()
+  message(STATUS "OpenCV not found: skipping armor_vision library and armor_demo executable.")
+endif()
+
 enable_testing()
 add_test(NAME mycamera_test COMMAND mycamera_test)
 set_tests_properties(mycamera_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

@@ -29,6 +29,11 @@ myCamera::myCamera(const std::string & source)
   } else {
     capture_.open(source_);
   }
+  if (capture_.isOpened()) {
+    capture_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    capture_.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+    capture_.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+  }
   opened_ = capture_.isOpened();
 #else
   opened_ = true;
