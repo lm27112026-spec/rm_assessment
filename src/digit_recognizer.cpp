@@ -1,3 +1,33 @@
+/**
+ * @file digit_recognizer.cpp
+ * @brief 数字识别器的实现（模板匹配）
+ *
+ * 【功能】
+ * 实现 DigitRecognizer 的完整识别流程：加载 1~5 号数字模板，
+ * 对待识别 ROI 进行与模板一致的预处理后计算加权相似度，
+ * 通过置信度阈值与“与次高分差距”双重判定输出可靠识别结果。
+ *
+ * 【方法】
+ *  - recognize：预处理 → 提取最大轮廓 → 居中到标准画布 →
+ *    与所有模板逐一计算相似度 → 排序 → 置信度与差距判定；
+ *  - load_templates_from_directory：遍历数字 1~5 与四种图片后缀，
+ *    读取并预处理有效模板存入 templates_；
+ *  - preprocess_roi：转灰度 → 高斯模糊 → OTSU 正/反阈值双路二值化 →
+ *    形态学清理 → 按质量得分择优选择正/反二值图；
+ *  - score_binary_image：前景占比越接近 18% 且填充率越高得分越高，
+ *    前景过少/过多或轮廓过小直接判为无效；
+ *  - center_digit_on_canvas：按轮廓包围盒加 12% 内边距裁剪，
+ *    等比缩放到 64×64 画布并居中（INTER_NEAREST 保持像素二值性）；
+ *  - pixel_similarity：bitwise_xor 统计不匹配像素占比，返回匹配率；
+ *  - contour_similarity：cv::matchShapes（CONTOURS_MATCH_I1）计算
+ *    轮廓距离 d，再映射为 1/(1+d) 的相似度；
+ *  - 其余辅助：to_gray / morph_clean / largest_contour（匿名命名空间）。
+ *
+ * 【实现方式】
+ *  - 相似度 = 0.55 × 轮廓相似度（形状主导）+ 0.45 × 像素相似度；
+ *  - 结果要求：最高置信度 ≥ 0.55 且与次高分差距 ≥ 0.05，否则返回 Unknown；
+ *  - 预处理对模板与候选完全一致，保证匹配时输入分布对齐。
+ */
 #include "src/digit_recognizer.hpp"
 
 #include <algorithm>

@@ -1,3 +1,34 @@
+/**
+ * @file detector.cpp
+ * @brief 装甲板检测器的实现
+ *
+ * 【功能】
+ * 实现 ArmorDetector 的完整检测流水线：从 BGR 图像中检测所有满足
+ * 几何与颜色约束的装甲板候选，并为每个候选生成归一化 ROI 供数字识别使用。
+ *
+ * 【方法】
+ *  - detect：主入口，依次执行 二值化 → 找灯条 → 按 x 排序 → 配对 → 去重；
+ *  - build_binary_mask：通道分离后计算 R-B 与 B-R 差值并阈值化得到颜色掩码，
+ *    再与亮度掩码（灰度阈值）求与，最后执行形态学闭/开运算去噪；
+ *  - find_lightbars：findContours 提取外部轮廓 → minAreaRect 拟合 → 
+ *    几何约束（面积/长宽比/角度/长度）过滤 → get_color 判定颜色；
+ *  - pair_lightbars：双重循环对同色灯条检查间距比例与垂直偏移约束，
+ *    通过几何校验后调用 fill_image_products 生成候选；
+ *  - check_lightbar_geometry：长度、角度误差、长宽比约束；
+ *  - check_armor_geometry：装甲长宽比、侧边比、矩形度误差约束；
+ *  - get_color：遍历轮廓内像素累加红/蓝通道和，按差值阈值判定颜色；
+ *  - fill_image_products：沿灯条方向（0.625 倍长度）扩展得到四角点，
+ *    计算包围盒，并通过 getPerspectiveTransform + warpPerspective
+ *    生成固定尺寸的归一化 ROI；
+ *  - remove_duplicates：对共享灯条或重叠面积比 > 0.6 的候选，
+ *    按评分（面积 /（1 + 矩形度误差 + 侧边比））保留较优者，标记另一为重复。
+ *
+ * 【实现方式】
+ *  - 二值化：颜色差（R-B / B-R）与亮度同时成立才保留，可同时检出红、蓝灯条；
+ *  - 灯条角度误差按与竖直方向偏差计算（见 armor.cpp 的归一化处理）；
+ *  - 配对约束全部以“较长灯条长度”为基准做比例化，使阈值与目标距离/尺度解耦；
+ *  - 去重同时考虑“共享灯条”与“包围盒重叠”两种重复来源，避免同一装甲被重复计数。
+ */
 #include "src/detector.hpp"
 
 #include <algorithm>
@@ -133,7 +164,8 @@ std::vector<Lightbar> ArmorDetector::find_lightbars(
   const cv::Mat & bgr_image, const cv::Mat & binary_mask) const
 {
   std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(binary_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+  cv::Mat contour_mask = binary_mask.clone();
+  cv::findContours(contour_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
   std::vector<Lightbar> lightbars;
   lightbars.reserve(contours.size());

@@ -1,3 +1,36 @@
+/**
+ * @file tracker.cpp
+ * @brief 装甲板目标追踪器的实现（卡尔曼滤波 + 状态机）
+ *
+ * 【功能】
+ * 实现 Tracker 的完整追踪逻辑：结合 8 维恒速模型卡尔曼滤波与
+ * lost/detecting/tracking/temp_lost 状态机，对检测候选进行初始化、
+ * 匹配与持续跟踪，输出平滑的目标框/中心/尺寸/颜色。
+ *
+ * 【方法】
+ *  - configure_filter：初始化卡尔曼滤波器——8 维状态、4 维测量、
+ *    恒速转移矩阵（位置+速度、尺寸+尺寸变化率）、测量矩阵
+ *    （观测 x/y/w/h），并设置过程/测量噪声协方差；
+ *  - update：状态机主逻辑，按“无候选 / 未初始化 / lost / detecting /
+ *    tracking / temp_lost”各分支处理；
+ *  - bootstrap：用种子候选填充卡尔曼状态（位置、宽高，速度置零）
+ *    并初始化跟踪信息，进入 detecting 状态；
+ *  - apply_prediction：调用 kalman.predict() 更新预测框，用于临时丢失期输出；
+ *  - apply_measurement：调用 kalman.correct() 用匹配候选修正状态并更新跟踪信息；
+ *  - choose_seed_candidate：无目标时按“靠近画面中心（或最大面积）、
+ *    已知颜色减分”的评分选取初始候选；
+ *  - choose_match_candidate：对颜色兼容的候选按 candidate_score 取最低分，
+ *    且分数须小于门限（max_match_distance + 0.25×√目标面积）才接受；
+ *  - candidate_score：中心距离 + 尺寸差异×权重 + 颜色失配惩罚。
+ *
+ * 【实现方式】
+ *  - 恒速模型：状态 [x, y, vx, vy, w, h, vw, vh]，测量 [x, y, w, h]；
+ *  - 状态机：detecting 状态连续匹配 min_detect_count（默认 2）帧
+ *    才升级为 tracking；tracking/temp_lost 中丢帧进入 temp_lost，
+ *    累计超过 max_temp_lost_count（默认 8）帧则 reset 回到 lost；
+ *  - 尺寸取 max(测量值, min_box_size) 防止退化；
+ *  - 颜色兼容：跟踪颜色未知、候选颜色未知或二者相同均视为兼容。
+ */
 #include "src/tracker.hpp"
 
 #include <algorithm>
@@ -63,6 +96,7 @@ void Tracker::reset()
   tracked_size_ = {};
   tracked_color_ = ArmorColor::unknown;
   tracked_candidate_ = {};
+  cv::setIdentity(kalman_.errorCovPost, cv::Scalar::all(1.0));
   kalman_.statePost = cv::Mat::zeros(kStateDim, 1, CV_32F);
   kalman_.statePre = cv::Mat::zeros(kStateDim, 1, CV_32F);
 }
