@@ -18,7 +18,7 @@ $OpenCvDir = "D:\OpenCV\opencv\build"
 $OpenCvBin = "D:\OpenCV\opencv\build\x64\vc16\bin"
 $OpenVinoDir = "D:\python\Lib\site-packages\openvino\cmake"
 $OpenVinoBin = "D:\python\Lib\site-packages\openvino\libs"
-$NeedsYolo = $Target -eq "yolov5_armor_demo" -or $Target -eq "yolov5_test"
+$NeedsYolo = $Target -eq "yolov5_armor_demo" -or $Target -eq "yolov5_pnp_demo" -or $Target -eq "yolov5_test"
 $ExeCandidates = @(
     (Join-Path $BuildDir "$Config\$Target.exe"),
     (Join-Path $BuildDir "MyCamera\$Config\$Target.exe"),
