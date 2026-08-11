@@ -12,8 +12,9 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
-#include "src/tracker.hpp"
-#include "src/yolov5/yolov5.hpp"
+#include "armor.hpp"
+#include "tracker.hpp"
+#include "yolov5.hpp"
 
 namespace
 {
@@ -25,8 +26,6 @@ struct DemoOptions
   std::string source = "0";
   std::string model_path = "models/yolov5/yolov5.xml";
   std::string device = "CPU";
-  bool headless = false;
-  bool has_max_frames = false;
   std::size_t max_frames = 0U;
 };
 
@@ -58,9 +57,8 @@ bool parse_size_t(const std::string & text, std::size_t & value)
 
 void print_usage()
 {
-  std::cout << "Usage: yolov5_armor_demo [--headless] [--max-frames N] [--device DEVICE] [source] [model_path]\n"
-               "  --headless: disable GUI and print summary on exit\n"
-               "  --max-frames N: stop after processing N frames in headless mode\n"
+  std::cout << "Usage: yolov5_armor_demo [--max-frames N] [--device DEVICE] [source] [model_path]\n"
+               "  --max-frames N: stop after processing N frames\n"
                "  --device DEVICE: OpenVINO device name (default CPU)\n"
                "  source: camera index or video file path (default 0)\n"
                "  model_path: YOLOv5 OpenVINO .xml path (default models/yolov5/yolov5.xml)\n";
@@ -77,10 +75,6 @@ DemoOptions parse_options(int argc, char ** argv)
       print_usage();
       std::exit(0);
     }
-    if (argument == "--headless") {
-      options.headless = true;
-      continue;
-    }
     if (argument == "--max-frames") {
       if (i + 1 >= argc) {
         std::cerr << "--max-frames requires a value\n";
@@ -91,7 +85,6 @@ DemoOptions parse_options(int argc, char ** argv)
         std::cerr << "--max-frames requires a non-negative integer\n";
         std::exit(1);
       }
-      options.has_max_frames = true;
       options.max_frames = max_frames;
       continue;
     }
@@ -159,7 +152,7 @@ void draw_detection(cv::Mat & frame, const rm_assessment::yolov5::Detection & de
 {
   cv::rectangle(frame, detection.box, {0, 255, 0}, 2, cv::LINE_AA);
   std::ostringstream label;
-  label << "cls " << detection.class_id << " " << std::fixed << std::setprecision(2) << detection.confidence;
+  label << "color=" << detection.color_id << " " << std::fixed << std::setprecision(2) << detection.confidence;
   cv::putText(frame, label.str(), {cvRound(detection.box.x), std::max(18, cvRound(detection.box.y) - 6)},
     cv::FONT_HERSHEY_SIMPLEX, 0.5, {0, 255, 0}, 1, cv::LINE_AA);
 }
@@ -204,13 +197,14 @@ int main(int argc, char ** argv)
   std::size_t total_detections = 0U;
   std::size_t tracker_hits = 0U;
 
-  const bool draw_gui = !options.headless;
   const std::string window_name = "yolov5_armor_demo";
-  if (draw_gui) {
-    cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
-  }
+  cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
 
   while (true) {
+    if (options.max_frames > 0U && frame_index >= options.max_frames) {
+      break;
+    }
+
     cv::Mat frame;
     if (!capture.read(frame) || frame.empty()) {
       break;
@@ -223,18 +217,27 @@ int main(int argc, char ** argv)
     candidates.reserve(detections.size());
     for (const auto & detection : detections) {
       rm_assessment::ArmorCandidate candidate;
+      candidate.corners = detection.corners;
+      if (detection.color_id == 0) {
+        candidate.color = rm_assessment::ArmorColor::blue;
+      } else if (detection.color_id == 1) {
+        candidate.color = rm_assessment::ArmorColor::red;
+      } else {
+        candidate.color = rm_assessment::ArmorColor::unknown;
+      }
+      candidate.center =
+        (candidate.corners[0] + candidate.corners[1] + candidate.corners[2] + candidate.corners[3]) * 0.25f;
+      cv::Point2f min_point = candidate.corners[0];
+      cv::Point2f max_point = candidate.corners[0];
+      for (std::size_t index = 1; index < candidate.corners.size(); ++index) {
+        min_point.x = std::min(min_point.x, candidate.corners[index].x);
+        min_point.y = std::min(min_point.y, candidate.corners[index].y);
+        max_point.x = std::max(max_point.x, candidate.corners[index].x);
+        max_point.y = std::max(max_point.y, candidate.corners[index].y);
+      }
       candidate.bounding_box = cv::Rect(
-        cvRound(detection.box.x), cvRound(detection.box.y),
-        cvRound(detection.box.width), cvRound(detection.box.height));
-      candidate.center = cv::Point2f(
-        detection.box.x + detection.box.width * 0.5f,
-        detection.box.y + detection.box.height * 0.5f);
-      std::array<cv::Point2f, 4> corners = {{
-        {detection.box.x, detection.box.y},
-        {detection.box.x + detection.box.width, detection.box.y},
-        {detection.box.x + detection.box.width, detection.box.y + detection.box.height},
-        {detection.box.x, detection.box.y + detection.box.height}}};
-      candidate.corners = corners;
+        cvRound(min_point.x), cvRound(min_point.y),
+        cvRound(max_point.x - min_point.x), cvRound(max_point.y - min_point.y));
       candidates.push_back(std::move(candidate));
     }
 
@@ -243,43 +246,36 @@ int main(int argc, char ** argv)
       ++tracker_hits;
     }
 
-    if (draw_gui) {
-      for (const auto & detection : detections) {
-        draw_detection(frame, detection);
-      }
-      if (tracker.has_target()) {
-        cv::rectangle(frame, tracker.tracked_box(), {0, 255, 255}, 2, cv::LINE_AA);
-        cv::putText(frame, "tracker " + tracker.state(), {12, 24}, cv::FONT_HERSHEY_SIMPLEX, 0.6,
-          {0, 255, 255}, 2, cv::LINE_AA);
-      }
+    for (const auto & detection : detections) {
+      draw_detection(frame, detection);
+    }
+    if (tracker.has_target()) {
+      cv::rectangle(frame, tracker.tracked_box(), {0, 255, 255}, 2, cv::LINE_AA);
+      cv::putText(frame, "tracker " + tracker.state(), {12, 24}, cv::FONT_HERSHEY_SIMPLEX, 0.6,
+        {0, 255, 255}, 2, cv::LINE_AA);
+    }
 
-      const auto now = std::chrono::steady_clock::now();
-      const double elapsed = std::chrono::duration<double>(now - last_tick).count();
-      if (elapsed > 0.0) {
-        fps = 1.0 / elapsed;
-      }
-      last_tick = now;
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed = std::chrono::duration<double>(now - last_tick).count();
+    if (elapsed > 0.0) {
+      fps = 1.0 / elapsed;
+    }
+    last_tick = now;
 
-      std::ostringstream hud;
-      hud << source_label(options.source) << " | model: loaded | fps: " << format_fps(fps)
-          << " | frame: " << frame_index << " | detections: " << detections.size();
-      cv::putText(frame, hud.str(), {12, 50}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 2, cv::LINE_AA);
-      cv::imshow(window_name, frame);
-      const int key = cv::waitKey(1);
-      if (key == 27 || key == 'q') {
-        break;
-      }
+    std::ostringstream hud;
+    hud << source_label(options.source) << " | model: loaded | fps: " << format_fps(fps)
+        << " | frame: " << frame_index << " | detections: " << detections.size();
+    cv::putText(frame, hud.str(), {12, 50}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 2, cv::LINE_AA);
+    cv::imshow(window_name, frame);
+    const int key = cv::waitKey(1);
+    if (key == 27 || key == 'q') {
+      break;
     }
 
     ++frame_index;
-    if (options.has_max_frames && frame_index >= options.max_frames) {
-      break;
-    }
   }
 
-  if (draw_gui) {
-    cv::destroyAllWindows();
-  }
+  cv::destroyAllWindows();
 
   std::cout << "Frames processed: " << frame_index << '\n';
   std::cout << "Total detections: " << total_detections << '\n';

@@ -10,9 +10,11 @@ CMakeFiles/
 cmake_install.cmake
 CTestTestfile.cmake
 Makefile
+!stm32/Makefile
 compile_commands.json
 *.cmake
 !CMakeLists.txt
+!cmake/helpers.cmake
 
 # ============================================================
 # Compiled Binaries & Objects

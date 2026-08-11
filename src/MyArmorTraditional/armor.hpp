@@ -24,8 +24,8 @@
  *    左上/右上/右下/左下顺序排列的角点、灯条间距比、长宽比以及矩形度误差；
  *  - 全部几何量均在构造函数内完成，本文件仅作声明，实现见 armor.cpp。
  */
-#ifndef RM_ASSESSMENT_SRC_ARMOR_HPP_
-#define RM_ASSESSMENT_SRC_ARMOR_HPP_
+#ifndef RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_
+#define RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_
 
 #include <array>
 #include <cstddef>
@@ -85,4 +85,4 @@ struct ArmorCandidate
 
 }  // namespace rm_assessment
 
-#endif  // RM_ASSESSMENT_SRC_ARMOR_HPP_
+#endif  // RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_

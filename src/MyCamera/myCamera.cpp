@@ -1,4 +1,4 @@
-#include "io/myCamera.hpp"
+#include "myCamera.hpp"
 
 #include <algorithm>
 #include <cctype>

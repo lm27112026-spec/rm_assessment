@@ -2,15 +2,15 @@
  * @file digit_recognizer.hpp
  * @brief Digit recognizer backed by an OpenCV DNN ONNX classifier.
  */
-#ifndef RM_ASSESSMENT_SRC_DIGIT_RECOGNIZER_HPP_
-#define RM_ASSESSMENT_SRC_DIGIT_RECOGNIZER_HPP_
+#ifndef RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DIGIT_RECOGNIZER_HPP_
+#define RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DIGIT_RECOGNIZER_HPP_
 
 #include <string>
 
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
 
-#include "src/armor.hpp"
+#include "armor.hpp"
 
 namespace rm_assessment
 {
@@ -51,4 +51,4 @@ private:
 
 }  // namespace rm_assessment
 
-#endif  // RM_ASSESSMENT_SRC_DIGIT_RECOGNIZER_HPP_
+#endif  // RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DIGIT_RECOGNIZER_HPP_

@@ -23,7 +23,7 @@
  *    side_ratio = 较长 / 较短灯条长度；rectangular_error 取左右灯条
  *    与两灯条连线的角度误差中的最大值，衡量四边形是否接近矩形。
  */
-#include "src/armor.hpp"
+#include "armor.hpp"
 
 #include <algorithm>
 #include <cmath>

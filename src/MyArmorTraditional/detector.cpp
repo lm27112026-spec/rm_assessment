@@ -29,7 +29,7 @@
  *  - 配对约束全部以“较长灯条长度”为基准做比例化，使阈值与目标距离/尺度解耦；
  *  - 去重同时考虑“共享灯条”与“包围盒重叠”两种重复来源，避免同一装甲被重复计数。
  */
-#include "src/detector.hpp"
+#include "detector.hpp"
 
 #include <algorithm>
 #include <cmath>

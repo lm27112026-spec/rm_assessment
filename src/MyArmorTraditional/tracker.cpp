@@ -31,7 +31,7 @@
  *  - 尺寸取 max(测量值, min_box_size) 防止退化；
  *  - 颜色兼容：跟踪颜色未知、候选颜色未知或二者相同均视为兼容。
  */
-#include "src/tracker.hpp"
+#include "tracker.hpp"
 
 #include <algorithm>
 #include <cmath>

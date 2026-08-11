@@ -1,0 +1,32 @@
+function(copy_yolo_runtime_dlls target_name)
+  if(WIN32)
+    foreach(runtime_dir IN LISTS _YOLO_RUNTIME_PATHS)
+      if(EXISTS "${runtime_dir}")
+        file(GLOB runtime_dlls CONFIGURE_DEPENDS "${runtime_dir}/*.dll")
+        if(runtime_dlls)
+          add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${runtime_dlls} $<TARGET_FILE_DIR:${target_name}>
+            COMMAND_EXPAND_LISTS)
+        endif()
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(set_test_working_directory test_name)
+  set_tests_properties(${test_name} PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endfunction()
+
+function(set_opencv_test_path test_name)
+  if(WIN32 AND DEFINED OpenCV_DIR)
+    get_filename_component(OpenCV_BIN_DIR "${OpenCV_DIR}/x64/vc16/bin" ABSOLUTE)
+    set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "PATH=${OpenCV_BIN_DIR};$ENV{PATH}")
+  endif()
+endfunction()
+
+function(set_yolo_test_path test_name)
+  if(WIN32 AND _YOLO_RUNTIME_PATHS)
+    list(JOIN _YOLO_RUNTIME_PATHS ";" _YOLO_RUNTIME_PATHS_JOINED)
+    set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "PATH=${_YOLO_RUNTIME_PATHS_JOINED};$ENV{PATH}")
+  endif()
+endfunction()

@@ -16,13 +16,13 @@
 
 #include <opencv2/opencv.hpp>
 
-#include "communication/frame.hpp"
-#include "communication/mySerial.hpp"
-#include "io/myCamera.hpp"
-#include "src/armor.hpp"
-#include "src/detector.hpp"
-#include "src/digit_recognizer.hpp"
-#include "src/tracker.hpp"
+#include "armor.hpp"
+#include "detector.hpp"
+#include "digit_recognizer.hpp"
+#include "frame.hpp"
+#include "myCamera.hpp"
+#include "mySerial.hpp"
+#include "tracker.hpp"
 
 namespace
 {
@@ -36,7 +36,6 @@ struct Config
   int max_frames = 0;  // 0 = infinite
   std::string evidence_path;
   bool no_send = false;
-  bool show_display = true;
 };
 
 void print_usage(const char * prog)
@@ -48,8 +47,7 @@ void print_usage(const char * prog)
             << "  --count N         Max frames (default: 0 = infinite)\n"
             << "  --evidence PATH   Log output path (default: stdout only)\n"
             << "  --model PATH      Digit classifier ONNX path\n"
-            << "  --no-send         Vision only, no serial output (dry run)\n"
-            << "  --no-display      Headless mode\n";
+            << "  --no-send         Vision only, no serial output (dry run)\n";
 }
 
 Config parse_args(int argc, char ** argv)
@@ -71,8 +69,6 @@ Config parse_args(int argc, char ** argv)
       cfg.model_path = argv[++i];
     } else if (arg == "--no-send") {
       cfg.no_send = true;
-    } else if (arg == "--no-display") {
-      cfg.show_display = false;
     } else if (arg == "--help" || arg == "-h") {
       print_usage(argv[0]);
       std::exit(0);
@@ -205,20 +201,18 @@ int main(int argc, char ** argv)
     ++frame_count;
 
     // Display
-    if (cfg.show_display) {
-      if (tracker.has_target()) {
-        const cv::Rect2f box = tracker.tracked_box();
-        cv::rectangle(frame, box, {0, 255, 255}, 2, cv::LINE_AA);
-        cv::circle(frame, tracker.tracked_center(), 4, {0, 255, 255}, cv::FILLED, cv::LINE_AA);
-      }
-      cv::putText(frame, "serial_demo | tracker: " + tracker.state() + " | FC:" + std::to_string(serial_frame_counter),
-                  cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
-      cv::imshow("serial_demo", frame);
+    if (tracker.has_target()) {
+      const cv::Rect2f box = tracker.tracked_box();
+      cv::rectangle(frame, box, {0, 255, 255}, 2, cv::LINE_AA);
+      cv::circle(frame, tracker.tracked_center(), 4, {0, 255, 255}, cv::FILLED, cv::LINE_AA);
+    }
+    cv::putText(frame, "serial_demo | tracker: " + tracker.state() + " | FC:" + std::to_string(serial_frame_counter),
+                cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+    cv::imshow("serial_demo", frame);
 
-      const int key = cv::waitKey(1);
-      if (key == 'q' || key == 'Q' || key == 27) {
-        break;  // q or ESC
-      }
+    const int key = cv::waitKey(1);
+    if (key == 'q' || key == 'Q' || key == 27) {
+      break;  // q or ESC
     }
 
     // 20 Hz timing

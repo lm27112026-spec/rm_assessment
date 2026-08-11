@@ -30,8 +30,8 @@
  *    丢失后进入 temp_lost 并以预测框持续输出，超过 max_temp_lost_count
  *    帧则回到 lost。实现见 tracker.cpp。
  */
-#ifndef RM_ASSESSMENT_SRC_TRACKER_HPP_
-#define RM_ASSESSMENT_SRC_TRACKER_HPP_
+#ifndef RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_TRACKER_HPP_
+#define RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_TRACKER_HPP_
 
 #include <cstddef>
 #include <string>
@@ -40,7 +40,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/video/tracking.hpp>
 
-#include "src/armor.hpp"
+#include "armor.hpp"
 
 namespace rm_assessment
 {
@@ -119,4 +119,4 @@ private:
 
 }  // namespace rm_assessment
 
-#endif  // RM_ASSESSMENT_SRC_TRACKER_HPP_
+#endif  // RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_TRACKER_HPP_

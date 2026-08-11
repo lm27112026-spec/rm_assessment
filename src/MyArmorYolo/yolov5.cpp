@@ -1,4 +1,4 @@
-#include "src/yolov5/yolov5.hpp"
+#include "yolov5.hpp"
 
 #include <algorithm>
 #include <filesystem>

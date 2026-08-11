@@ -2,8 +2,8 @@
  * @file yolov5_utils.hpp
  * @brief Reusable YOLOv5 preprocessing and postprocessing helpers.
  */
-#ifndef RM_ASSESSMENT_SRC_YOLOV5_YOLOV5_UTILS_HPP_
-#define RM_ASSESSMENT_SRC_YOLOV5_YOLOV5_UTILS_HPP_
+#ifndef RM_ASSESSMENT_MY_ARMOR_YOLO_YOLOV5_UTILS_HPP_
+#define RM_ASSESSMENT_MY_ARMOR_YOLO_YOLOV5_UTILS_HPP_
 
 #include <array>
 #include <cmath>
@@ -57,4 +57,4 @@ std::vector<Detection> decode_outputs(
 }  // namespace yolov5
 }  // namespace rm_assessment
 
-#endif  // RM_ASSESSMENT_SRC_YOLOV5_YOLOV5_UTILS_HPP_
+#endif  // RM_ASSESSMENT_MY_ARMOR_YOLO_YOLOV5_UTILS_HPP_

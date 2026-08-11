@@ -29,14 +29,14 @@
  *  - detect 为 const 方法，检测过程不修改检测器状态，可被多线程安全调用；
  *  - 所有阈值均从 Params 读取，便于集中调参，实现见 detector.cpp。
  */
-#ifndef RM_ASSESSMENT_SRC_DETECTOR_HPP_
-#define RM_ASSESSMENT_SRC_DETECTOR_HPP_
+#ifndef RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DETECTOR_HPP_
+#define RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DETECTOR_HPP_
 
 #include <vector>
 
 #include <opencv2/core.hpp>
 
-#include "src/armor.hpp"
+#include "armor.hpp"
 
 namespace rm_assessment
 {
@@ -93,4 +93,4 @@ private:
 
 }  // namespace rm_assessment
 
-#endif  // RM_ASSESSMENT_SRC_DETECTOR_HPP_
+#endif  // RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_DETECTOR_HPP_

@@ -8,9 +8,9 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "src/detector.hpp"
-#include "src/digit_recognizer.hpp"
-#include "src/tracker.hpp"
+#include "detector.hpp"
+#include "digit_recognizer.hpp"
+#include "tracker.hpp"
 
 namespace
 {

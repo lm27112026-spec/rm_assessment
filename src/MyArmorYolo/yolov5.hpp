@@ -6,7 +6,7 @@
 #include <openvino/openvino.hpp>
 #include <opencv2/core.hpp>
 
-#include "src/yolov5/yolov5_utils.hpp"
+#include "yolov5_utils.hpp"
 
 namespace rm_assessment::yolov5
 {
@@ -22,8 +22,8 @@ private:
   std::string device_;
   ov::Core core_;
   ov::CompiledModel compiled_model_;
-  float confidence_threshold_ = 0.3F;
-  float nms_threshold_ = 0.45F;
+  float confidence_threshold_ = 0.7F;
+  float nms_threshold_ = 0.3F;
 };
 
 }  // namespace rm_assessment::yolov5

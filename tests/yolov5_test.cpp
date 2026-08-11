@@ -1,4 +1,4 @@
-#include "src/yolov5/yolov5_utils.hpp"
+#include "yolov5_utils.hpp"
 
 #include <cmath>
 #include <exception>

@@ -2,7 +2,7 @@
  * @file digit_recognizer.cpp
  * @brief OpenCV DNN ONNX digit recognizer implementation.
  */
-#include "src/digit_recognizer.hpp"
+#include "digit_recognizer.hpp"
 
 #include <algorithm>
 #include <array>

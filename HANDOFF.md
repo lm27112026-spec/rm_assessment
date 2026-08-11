@@ -3,7 +3,7 @@
 
 ## 1. 项目概述
 
-本项目是一个基于 C++17 和 OpenCV 的装甲板视觉演示程序，当前实现了：
+本项目是一个基于 C++17 和 OpenCV/OpenVINO 的装甲板视觉演示程序，当前按功能模块拆分为 `MyCamera`、`MyArmorTraditional`、`MyArmorYolo`、`communication` 和 `stm32`，已实现：
 
 1. 从 USB/内置摄像头、视频文件或网络视频源读取图像。
 2. 根据灯条亮度和颜色信息提取候选灯条。
@@ -11,7 +11,9 @@
 4. 使用 Kalman Filter 风格的状态跟踪器，对连续帧中的目标进行跟踪和短时预测。
 5. 使用 `learning/assets/tiny_resnet.onnx` 对装甲板数字/类别进行识别。
 6. 在窗口中显示检测框、识别结果、跟踪状态、帧率等 HUD 信息。
-7. 在无摄像头时使用 `demo.avi` 进行无界面冒烟测试。
+7. 使用 YOLOv5 OpenVINO 模型完成题目3装甲板检测与跟随演示。
+8. 使用 `communication/` 中的 `mySerial` 和帧协议完成上位机串口封帧发送。
+9. 在无摄像头时使用 `demo.avi` 进行无界面冒烟测试。
 
 重要约束：`learning/` 目录是只读输入，本次实现没有修改其中任何文件。
 
@@ -21,19 +23,44 @@
 
 ```text
 rm_assessment/
-├─ CMakeLists.txt                 CMake 构建配置
+├─ CMakeLists.txt                 根 CMake，负责依赖查找和 add_subdirectory
+├─ cmake/
+│  └─ helpers.cmake               测试环境和运行时 DLL 辅助函数
 ├─ run.ps1                        Windows 构建和运行脚本
 ├─ HANDOFF.md                     本交接文档
-├─ src/
+├─ io/
+│  └─ example.cpp                 题目1要求保留的 myCamera 示例
+├─ MyCamera/
+│  ├─ CMakeLists.txt
+│  └─ myCamera.hpp/.cpp           跨平台图像采集封装
+├─ MyArmorTraditional/
+│  ├─ CMakeLists.txt
 │  ├─ armor.hpp/.cpp              装甲板数据结构、候选和几何辅助
 │  ├─ detector.hpp/.cpp           灯条检测、灯条配对和 ROI 生成
 │  ├─ digit_recognizer.hpp/.cpp   ONNX 数字识别器
 │  └─ tracker.hpp/.cpp            连续帧跟踪器
+├─ MyArmorYolo/
+│  ├─ CMakeLists.txt
+│  ├─ yolov5.hpp/.cpp             YOLOv5 OpenVINO 推理封装
+│  └─ yolov5_utils.hpp/.cpp       letterbox、decode、NMS 等工具
+├─ communication/
+│  ├─ CMakeLists.txt
+│  ├─ frame.hpp/.cpp              0xAA + payload + 0xBB 帧协议
+│  └─ mySerial.hpp/.cpp           PC 端串口封装
+├─ stm32/                         下位机 UART/OLED 工程与说明
 ├─ tasks/
-│  └─ armor_demo.cpp              主程序、摄像头/视频输入和可视化
+│  ├─ CMakeLists.txt
+│  ├─ armor_demo.cpp              题目2传统视觉演示
+│  ├─ yolov5_armor_demo.cpp       题目3 YOLO 演示
+│  ├─ serial_demo.cpp             视觉到串口联调演示
+│  └─ serial_loopback.cpp         串口回环测试程序
 ├─ tests/
+│  ├─ CMakeLists.txt
 │  ├─ armor_vision_test.cpp       检测器、识别器和跟踪器测试
-│  └─ myCamera_test.cpp           摄像头基础测试
+│  ├─ myCamera_interface_test.cpp myCamera 编译期接口测试
+│  ├─ myCamera_test.cpp           摄像头基础测试
+│  └─ yolov5_test.cpp             YOLO 后处理和模型输出契约测试
+├─ models/yolov5/                 YOLOv5 OpenVINO 模型
 └─ learning/                      已有模型和示例素材，不要修改
    └─ assets/
       ├─ tiny_resnet.onnx         9 类装甲板分类模型
@@ -214,9 +241,18 @@ cmake --build build --config Release
 生成的主要程序：
 
 ```text
-build\Release\armor_demo.exe
-build\Release\armor_vision_test.exe
-build\Release\mycamera_test.exe
+build\tasks\Release\armor_demo.exe
+build\tests\Release\armor_vision_test.exe
+build\tests\Release\mycamera_test.exe
+```
+
+启用 YOLO/OpenVINO 时使用：
+
+```powershell
+cmake -S . -B build -DOpenCV_DIR="D:\OpenCV\opencv\build" `
+  -DYOLO_WITH_OPENVINO=ON `
+  -DOpenVINO_DIR="D:\python\Lib\site-packages\openvino\cmake"
+cmake --build build --config Release
 ```
 
 ### 5.2 使用 run.ps1 构建并运行
@@ -292,7 +328,7 @@ learning/assets/tiny_resnet.onnx
 
 ```powershell
 $env:Path = "D:\OpenCV\opencv\build\x64\vc16\bin;$env:Path"
-& .\build\Release\armor_demo.exe --headless --max-frames 300 `
+& .\build\tasks\Release\armor_demo.exe --headless --max-frames 300 `
   learning\assets\demo\demo.avi
 ```
 
@@ -323,7 +359,7 @@ $env:Path = "D:\OpenCV\opencv\build\x64\vc16\bin;$env:Path"
 不要直接双击或直接运行：
 
 ```powershell
-.\build\Release\mycamera_test.exe
+.\build\tests\Release\mycamera_test.exe
 ```
 
 否则 Windows 可能报：
@@ -336,7 +372,7 @@ $env:Path = "D:\OpenCV\opencv\build\x64\vc16\bin;$env:Path"
 
 ```powershell
 $env:Path = "D:\OpenCV\opencv\build\x64\vc16\bin;$env:Path"
-& .\build\Release\mycamera_test.exe
+& .\build\tests\Release\mycamera_test.exe
 ```
 
 另外，`mycamera_test` 可能会等待真实摄像头输入。没有摄像头时看起来像长时间不退出，这是输入设备问题，不是 DLL 问题。
@@ -379,7 +415,7 @@ ctest --test-dir build -C Release -R armor_vision_test --output-on-failure
 
 ```powershell
 $env:Path = "D:\OpenCV\opencv\build\x64\vc16\bin;$env:Path"
-& .\build\Release\armor_demo.exe --headless --max-frames 30 `
+& .\build\tasks\Release\armor_demo.exe --headless --max-frames 30 `
   learning\assets\demo\demo.avi
 ```
 
