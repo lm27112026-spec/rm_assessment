@@ -12,3 +12,7 @@ if(WIN32)
 elseif(UNIX)
     target_link_libraries(communication PRIVATE pthread)
 endif()
+
+add_executable(frame_test tests/frame_test.cpp)
+target_link_libraries(frame_test PRIVATE communication)
+add_test(NAME communication_frame_test COMMAND frame_test)

@@ -7,7 +7,7 @@
   * Wave 1 Task 4: STM32 CubeMX project skeleton.
   * - HAL init, SystemClock (HSE 8MHz -> PLL -> 72MHz), GPIO, USART1, I2C1
   * - USART1 RX interrupt enabled (single byte receive)
-  * - PC13 LED heartbeat toggle every 500ms
+  * - PC13 LED blinks on each received frame (Wave 2 Task 9)
   *
   * NOTE: huart1 / hi2c1 are defined in usart.c / i2c.c (standard CubeMX
   * pattern) and declared extern via usart.h / i2c.h.
@@ -22,6 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "uart_ring.h"
+#include "frame_parser.h"
+#include "ssd1306.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,8 +43,9 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 
-/* Single byte RX buffer for USART1 interrupt receive (Wave 2 Task 8) */
-static uint8_t rx_byte;
+/* Latest parsed frame, consumed by OLED display (Wave 2 Task 10) */
+static payload_t latest_payload_;
+static uint32_t last_valid_frame_ms_ = 0;
 
 /* USER CODE END PV */
 
@@ -83,8 +88,11 @@ int main(void)
 
   /* USER CODE BEGIN 2 */
 
-  /* Enable USART1 RX interrupt (single byte receive) */
-  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+  /* Start interrupt-driven UART RX ring buffer (Wave 2 Task 8) */
+  uart_ring_init(&huart1);
+
+  /* Initialize SSD1306 OLED display (Wave 2 Task 10) */
+  ssd1306_init(&hi2c1);
 
   /* USER CODE END 2 */
 
@@ -92,15 +100,76 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-    HAL_Delay(500);
-
-    /* TODO Wave 2 Task 8: consume uart_ring buffer */
-    /* TODO Wave 2 Task 9: feed bytes to frame_parser */
-    /* TODO Wave 2 Task 10: update OLED display */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    uint8_t byte;
+    payload_t parsed;
+    uint8_t frame_ready = 0;
+
+    /* Consume ring buffer and feed frame parser (Wave 2 Tasks 8/9) */
+    while (uart_ring_read_byte(&byte))
+    {
+      parser_feed(byte, &parsed);
+      if (parser_has_frame())
+      {
+        latest_payload_ = parsed;
+        last_valid_frame_ms_ = HAL_GetTick();
+        frame_ready = 1;
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);  /* blink on frame */
+      }
+    }
+
+    /* OLED display update (100ms interval, Wave 2 Task 10) */
+    static uint32_t last_display_ms = 0;
+    uint32_t now = HAL_GetTick();
+    if (now - last_display_ms >= 100)
+    {
+      last_display_ms = now;
+
+      ssd1306_clear();
+
+      char line[22];
+
+      /* Row 1: frame counter */
+      sprintf(line, "FC: %5u", latest_payload_.frame_counter);
+      ssd1306_draw_string(0, 0, line);
+
+      /* Row 2: target X, Y */
+      if (latest_payload_.target_present)
+      {
+        sprintf(line, "X:%+5d Y:%+5d",
+                latest_payload_.target_x, latest_payload_.target_y);
+      }
+      else
+      {
+        sprintf(line, "X: --- Y: ---");
+      }
+      ssd1306_draw_string(0, 1, line);
+
+      /* Row 3: distance + tracker state */
+      sprintf(line, "D:%5dmm S:%u",
+              latest_payload_.distance, latest_payload_.tracker_state);
+      ssd1306_draw_string(0, 2, line);
+
+      /* Row 4: digit + confidence (= xor_checksum for now) */
+      sprintf(line, "DGT:%u XOR:%02X",
+              latest_payload_.digit, latest_payload_.xor_checksum);
+      ssd1306_draw_string(0, 3, line);
+
+      /* Row 5: errors + ring buffer available */
+      sprintf(line, "ERR:%u RX:%u",
+              parser_error_count(), uart_ring_available());
+      ssd1306_draw_string(0, 4, line);
+
+      /* LINK LOST check (250ms without valid frame) */
+      if (now - last_valid_frame_ms_ > 250)
+      {
+        ssd1306_draw_string(0, 6, "  LINK LOST");
+      }
+
+      ssd1306_flush();
+    }
   }
   /* USER CODE END 3 */
 }

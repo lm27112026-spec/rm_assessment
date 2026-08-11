@@ -41,6 +41,9 @@ private:
     size_t errors_ = 0;
     bool ready_ = false;
     Payload latest_{};
+    std::array<Payload, 4> queue_{};
+    size_t queue_head_ = 0;
+    size_t queue_count_ = 0;
 };
 
 } // namespace frame
