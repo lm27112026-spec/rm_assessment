@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(rm_assessment_mycamera LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -38,16 +40,26 @@ if(OpenCV_FOUND)
   add_executable(armor_demo tasks/armor_demo.cpp)
   target_link_libraries(armor_demo PRIVATE armor_vision)
 
+  add_subdirectory(communication)
+
+  add_executable(serial_demo tasks/serial_demo.cpp)
+  target_link_libraries(serial_demo PRIVATE armor_vision mycamera communication)
+  if(MSVC)
+    # Existing src/*.hpp headers contain GBK comments; silence C4819 codepage warnings.
+    target_compile_options(serial_demo PRIVATE /wd4819)
+  endif()
+
+  add_executable(serial_loopback tasks/serial_loopback.cpp)
+  target_link_libraries(serial_loopback PRIVATE communication)
+
   add_executable(armor_vision_test tests/armor_vision_test.cpp)
   target_link_libraries(armor_vision_test PRIVATE armor_vision)
 else()
   message(STATUS "OpenCV not found: skipping armor_vision library and armor_demo executable.")
 endif()
 
-enable_testing()
 add_test(NAME mycamera_test COMMAND mycamera_test)
 set_tests_properties(mycamera_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-
 if(OpenCV_FOUND)
   add_test(NAME armor_vision_test COMMAND armor_vision_test)
   set_tests_properties(armor_vision_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

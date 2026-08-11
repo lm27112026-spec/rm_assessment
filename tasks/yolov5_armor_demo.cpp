@@ -170,6 +170,11 @@ int main(int argc, char ** argv)
 {
   const DemoOptions options = parse_options(argc, argv);
 
+  if (!fs::exists(options.model_path)) {
+    std::cerr << "Model not found: " << options.model_path << '\n';
+    return 1;
+  }
+
   rm_assessment::yolov5::YOLOV5Detector detector(options.model_path, options.device);
   rm_assessment::Tracker tracker;
 
@@ -186,11 +191,6 @@ int main(int argc, char ** argv)
 
   if (!capture.isOpened()) {
     std::cerr << "Failed to open source: " << options.source << '\n';
-    return 1;
-  }
-
-  if (!fs::exists(options.model_path)) {
-    std::cerr << "Model not found: " << options.model_path << '\n';
     return 1;
   }
 
@@ -222,13 +222,20 @@ int main(int argc, char ** argv)
     std::vector<rm_assessment::ArmorCandidate> candidates;
     candidates.reserve(detections.size());
     for (const auto & detection : detections) {
-      std::vector<cv::Point2f> corners = {
+      rm_assessment::ArmorCandidate candidate;
+      candidate.bounding_box = cv::Rect(
+        cvRound(detection.box.x), cvRound(detection.box.y),
+        cvRound(detection.box.width), cvRound(detection.box.height));
+      candidate.center = cv::Point2f(
+        detection.box.x + detection.box.width * 0.5f,
+        detection.box.y + detection.box.height * 0.5f);
+      std::array<cv::Point2f, 4> corners = {{
         {detection.box.x, detection.box.y},
         {detection.box.x + detection.box.width, detection.box.y},
         {detection.box.x + detection.box.width, detection.box.y + detection.box.height},
-        {detection.box.x, detection.box.y + detection.box.height}};
-      candidates.emplace_back(detection.class_id, detection.confidence, cv::Rect(cvRound(detection.box.x), cvRound(detection.box.y),
-        cvRound(detection.box.width), cvRound(detection.box.height)), corners);
+        {detection.box.x, detection.box.y + detection.box.height}}};
+      candidate.corners = corners;
+      candidates.push_back(std::move(candidate));
     }
 
     const bool tracked = tracker.update(candidates, frame.size());

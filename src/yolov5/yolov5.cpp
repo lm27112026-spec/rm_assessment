@@ -23,9 +23,14 @@ YOLOV5Detector::YOLOV5Detector(const std::string & model_path, std::string devic
 {
   const std::filesystem::path model_file = std::filesystem::absolute(model_path_);
   const std::filesystem::path weights_file = std::filesystem::path(model_file).replace_extension(".bin");
+  if (!std::filesystem::exists(model_file)) {
+    throw std::runtime_error("YOLOv5 model XML not found: " + model_file.string());
+  }
+  if (!std::filesystem::exists(weights_file)) {
+    throw std::runtime_error("YOLOv5 model weights not found: " + weights_file.string());
+  }
   const std::string model_path_string = model_file.string();
-  const std::string weights_path_string = weights_file.string();
-  const auto model = core_.read_model(model_path_string, weights_path_string);
+  const auto model = core_.read_model(model_path_string);
   compiled_model_ = core_.compile_model(model, device_);
 }
 

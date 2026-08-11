@@ -101,7 +101,7 @@ std::vector<Detection> decode_outputs(
   const cv::Point & pad)
 {
   std::vector<Detection> detections;
-  if (output.empty() || output.cols < 6 || output.type() != CV_32F) {
+  if (output.empty() || output.cols < kOutputCols || output.type() != CV_32F) {
     return detections;
   }
 
@@ -118,48 +118,94 @@ std::vector<Detection> decode_outputs(
   }
 
   for (int i = 0; i < output.rows; ++i) {
-    const float x = output.at<float>(i, 0);
-    const float y = output.at<float>(i, 1);
-    const float w = output.at<float>(i, 2);
-    const float h = output.at<float>(i, 3);
-    const float objectness = output.at<float>(i, 4);
-    if (w <= 0.0F || h <= 0.0F || objectness <= 0.0F) {
+    // Skip rows with NaN/Inf in any corner coordinate (cols 0-7).
+    bool invalid_coord = false;
+    for (int col = 0; col < 8; ++col) {
+      const float corner_value = output.at<float>(i, col);
+      if (std::isnan(corner_value) || std::isinf(corner_value)) {
+        invalid_coord = true;
+        break;
+      }
+    }
+    if (invalid_coord) {
       continue;
     }
 
-    int class_id = 0;
-    float best_class_probability = output.at<float>(i, 5);
-    for (int class_col = 6; class_col < output.cols; ++class_col) {
-      const float probability = output.at<float>(i, class_col);
-      if (probability > best_class_probability) {
-        best_class_probability = probability;
-        class_id = class_col - 5;
+    // col 8 is the score logit; reject NaN/Inf before sigmoid and filter by confidence.
+    const float raw_score = output.at<float>(i, kScoreColumn);
+    if (std::isnan(raw_score) || std::isinf(raw_score)) {
+      continue;
+    }
+    const float score = sigmoid(raw_score);
+    if (score < confidence_threshold) {
+      continue;
+    }
+
+    // Model emits corners as [TL, BL, BR, TR]; reorder to [TL, TR, BR, BL].
+    // Map each corner from letterbox space back to original image space:
+    // original = (model - pad) * original_size / scale.
+    const cv::Point2f model_corners[4] = {
+      {output.at<float>(i, 0), output.at<float>(i, 1)},  // TL
+      {output.at<float>(i, 2), output.at<float>(i, 3)},  // BL
+      {output.at<float>(i, 4), output.at<float>(i, 5)},  // BR
+      {output.at<float>(i, 6), output.at<float>(i, 7)},  // TR
+    };
+    const int corners_order[4] = {0, 3, 2, 1};  // TL, TR, BR, BL
+    Detection det;
+    for (int corner = 0; corner < 4; ++corner) {
+      const cv::Point2f & model_pt = model_corners[corners_order[corner]];
+      det.corners[corner] = {
+        (model_pt.x - static_cast<float>(pad.x)) * static_cast<float>(original_size.width) /
+          static_cast<float>(scale.width),
+        (model_pt.y - static_cast<float>(pad.y)) * static_cast<float>(original_size.height) /
+          static_cast<float>(scale.height)};
+    }
+
+    // Axis-aligned box from the min/max of the reordered corners.
+    float min_x = det.corners[0].x;
+    float max_x = det.corners[0].x;
+    float min_y = det.corners[0].y;
+    float max_y = det.corners[0].y;
+    for (int corner = 1; corner < 4; ++corner) {
+      min_x = std::min(min_x, det.corners[corner].x);
+      max_x = std::max(max_x, det.corners[corner].x);
+      min_y = std::min(min_y, det.corners[corner].y);
+      max_y = std::max(max_y, det.corners[corner].y);
+    }
+    const cv::Rect2f box = clamp_box(
+      cv::Rect2f(min_x, min_y, max_x - min_x, max_y - min_y), original_size);
+    // min/max guarantees non-negative extents; only reject impossible negatives.
+    // Zero-area boxes (collapsed corners) are still valid detections.
+    if (box.width < 0.0F || box.height < 0.0F) {
+      continue;
+    }
+
+    // Color one-hot (cols 9-12): argmax index -> color_id (0-3).
+    int color_id = 0;
+    float best_color = output.at<float>(i, kColorStartCol);
+    for (int col = kColorStartCol + 1; col < kColorStartCol + kColorCount; ++col) {
+      const float value = output.at<float>(i, col);
+      if (value > best_color) {
+        best_color = value;
+        color_id = col - kColorStartCol;
       }
     }
 
-    if (best_class_probability <= 0.0F) {
-      continue;
+    // Digit one-hot (cols 13-21): argmax index -> digit_id (0-8).
+    int digit_id = 0;
+    float best_digit = output.at<float>(i, kDigitStartCol);
+    for (int col = kDigitStartCol + 1; col < kDigitStartCol + kDigitCount; ++col) {
+      const float value = output.at<float>(i, col);
+      if (value > best_digit) {
+        best_digit = value;
+        digit_id = col - kDigitStartCol;
+      }
     }
 
-    const float confidence = objectness * best_class_probability;
-
-    if (confidence < confidence_threshold) {
-      continue;
-    }
-
-    const float left = (x - w * 0.5F - static_cast<float>(pad.x)) / gain_x;
-    const float top = (y - h * 0.5F - static_cast<float>(pad.y)) / gain_y;
-    const float width = w / gain_x;
-    const float height = h / gain_y;
-    const cv::Rect2f box = clamp_box(cv::Rect2f(left, top, width, height), original_size);
-    if (box.width <= 0.0F || box.height <= 0.0F) {
-      continue;
-    }
-
-    Detection det;
     det.box = box;
-    det.confidence = confidence;
-    det.class_id = class_id;
+    det.confidence = score;
+    det.color_id = color_id;
+    det.digit_id = digit_id;
     detections.push_back(det);
   }
 
