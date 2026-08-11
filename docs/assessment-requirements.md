@@ -53,7 +53,7 @@
 | 目标跟随 | 已具备基础实现 | `src/tracker.*` | 使用卡尔曼滤波和状态机维持目标 |
 | 综合演示 | 已具备基础实现 | `tasks/armor_demo.cpp` | 串联检测、识别、跟踪与可视化 |
 | 自动测试 | 已具备部分测试 | `tests/` | 覆盖摄像头接口、合成灯条检测、模型异常处理和跟踪状态转换 |
-| YOLO 检测 | 待实现 | 无正式项目模块 | `learning/` 内仅有 YOLOv5、YOLOv8、YOLO11 等只读参考代码和模型资源 |
+| YOLO 检测 | 待实现 | `models/yolov5/` 已放置模型，尚无正式推理模块 | 选用 YOLOv5 OpenVINO 模型；`learning/` 内相关 YOLO 代码仅作只读参考 |
 | 上下位机通信 | 待实现 | 无正式项目模块 | 需要设计 PC 端串口类、STM32 接收解析和 OLED 显示程序 |
 | 距离/姿态解算 | 待实现（发挥项） | 无正式项目模块 | `learning/tasks/auto_aim/solver.*` 可只读参考其 PnP 和重投影思路 |
 | 父子级 CMake | 待实现（发挥项） | 当前仅根 `CMakeLists.txt` | 需要按功能目录拆分子工程 |
@@ -180,13 +180,13 @@ BGR 图像
 
 ### 7.1 资源准备
 
-1. 优先使用视觉招新群提供的数据集；若自行寻找资源，必须记录来源和许可证。
-2. 确认标签语义：只标装甲板，还是同时包含颜色、大小和数字类别。
-3. 划分训练集、验证集和测试集，避免同一视频相邻帧跨集合造成数据泄漏。
-4. 增强策略覆盖曝光变化、运动模糊、旋转、缩放、遮挡和复杂背景。
-5. 训练产物导出为工程可部署格式。当前 `learning/assets/` 中的 OpenVINO 模型只能作为只读参考资源，是否适合本项目数据需要重新验证。
+1. YOLO 模型明确选用 **YOLOv5**。
+2. 已将 `learning/assets/yolov5.xml` 和 `learning/assets/yolov5.bin` 复制到项目正式模型路径 `models/yolov5/`，后续推理只读取 `models/yolov5/yolov5.xml` 与 `models/yolov5/yolov5.bin`，不直接依赖 `learning/`。
+3. `learning/tasks/auto_aim/yolos/yolov5.*`、`learning/tasks/auto_aim/yolo.*` 和相关检测后处理代码仅作为只读参考，用于理解 OpenVINO 推理、letterbox、NMS、坐标还原和装甲板结果组装流程。
+4. 仍需确认 YOLOv5 模型的类别表、输入尺寸、置信度阈值、NMS 阈值和标签语义；这些参数不能凭文件名推断，统一标记为 `TBD`。
+5. 若后续补充视觉招新群数据集或自采数据，应单独记录数据来源、许可证、划分方式和评估结果。
 
-数据集地址、类别表、输入尺寸、所选 YOLO 版本和目标精度均为 `TBD`。
+模型版本和项目内模型路径已确定；数据集地址、类别表、输入尺寸、阈值配置和目标精度仍为 `TBD`。
 
 ### 7.2 预计软件设计
 
@@ -195,7 +195,7 @@ BGR 图像
 ```cpp
 class myYOLO {
 public:
-  // 具体构造参数和返回类型在实现阶段依据推理后端确定。
+  // 固定加载项目内 YOLOv5 OpenVINO 模型，具体参数在实现阶段确定。
   std::vector<Detection> detect(const cv::Mat & frame);
 
 private:
@@ -206,13 +206,13 @@ private:
 预计处理步骤：
 
 1. Letterbox 缩放并记录比例与填充偏移。
-2. 使用选定后端执行推理，候选后处理包括置信度过滤和 NMS。
+2. 使用 OpenVINO 加载 `models/yolov5/yolov5.xml` 和 `models/yolov5/yolov5.bin` 执行推理，后处理包括置信度过滤和 NMS。
 3. 将框和关键点映射回原图坐标。
 4. 转换为项目统一的 `ArmorCandidate` 或统一检测结果结构。
 5. 复用或扩展 `Tracker` 完成时序跟随，避免传统视觉与 YOLO 各自维护一套跟踪逻辑。
 6. 输出框、类别、置信度、目标 ID 和跟踪状态。
 
-推理后端可在 OpenCV DNN、OpenVINO 或其他现有运行时中选择。选择标准应包括 Windows/Ubuntu 支持、模型兼容性、部署复杂度和实测速度，不应在未验证前固定。
+推理后端优先采用 `learning/` 参考代码中使用的 OpenVINO 路线；若目标环境缺少 OpenVINO，再评估是否增加 OpenCV DNN 等备用后端。无论使用哪种后端，正式代码必须位于项目自有目录中，不能修改或直接迁移覆盖 `learning/` 文件。
 
 ### 7.3 验收项目
 
@@ -221,6 +221,7 @@ private:
 - 框坐标在不同输入宽高比下能正确映射回原图。
 - CPU 或目标设备上的平均 FPS 满足最终约定值。
 - 模型缺失、格式不兼容或推理失败时返回明确错误，不导致未定义行为。
+- 验收时确认程序实际加载的是 `models/yolov5/yolov5.xml`，而不是 `learning/assets/yolov5.xml`。
 
 ## 8. 题目4：电脑与 STM32 上下位机通信
 
@@ -414,6 +415,77 @@ ctest --test-dir build -C Release --output-on-failure
 
 Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构建与测试。涉及摄像头、串口和 OLED 的硬件测试不能只依赖 CI，需要单独保存现场验收记录。
 
+### 11.1 Windows 运行时 DLL 搜索路径问题
+
+**问题**：Windows 下构建成功后，直接双击或命令行运行可执行文件时，弹出系统错误对话框提示找不到 `opencv_world4100d.dll`（Debug 配置）或 `opencv_world4100.dll`（Release 配置），程序无法启动。这是 OpenCV 动态链接库不在 Windows DLL 搜索路径中导致的，属于本项目最常见的运行时错误之一。
+
+**根因**：Windows 加载 DLL 时按以下顺序搜索：可执行文件所在目录 → 系统目录（`System32`）→ `PATH` 环境变量 → 当前工作目录。CMake 构建的可执行文件位于 `build/<config>/` 子目录中，而 OpenCV 的 DLL 位于 OpenCV 安装目录的 `bin/` 下，两者不在同一目录且 `PATH` 中通常不含该路径，因此运行时加载失败。
+
+**推荐解决方案（按优先级）**：
+
+1. **CMake 自动复制 DLL 到输出目录（推荐，一劳永逸）**：
+
+   在根 `CMakeLists.txt` 或各子模块的 CMake 中，对每个生成的可执行目标追加生成后事件：
+
+   ```cmake
+   # 查找 OpenCV DLL 所在目录
+   get_target_property(OpenCV_BIN_DIR_DEBUG
+       opencv_world IMPORTED_LOCATION_DEBUG)
+   get_filename_component(OpenCV_BIN_DIR_DEBUG
+       "${OpenCV_BIN_DIR_DEBUG}" DIRECTORY)
+
+   # 对目标自动复制 DLL（Debug 与 Release 分别处理）
+   add_custom_command(TARGET my_target POST_BUILD
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different
+           "$<$<CONFIG:Debug>:${OpenCV_BIN_DIR_DEBUG}/opencv_world4100d.dll>"
+           "$<$<CONFIG:Debug>:$<TARGET_FILE_DIR:my_target>>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different
+           "$<$<CONFIG:Release>:${OpenCV_BIN_DIR_RELEASE}/opencv_world4100.dll>"
+           "$<$<CONFIG:Release>:$<TARGET_FILE_DIR:my_target>>"
+   )
+   ```
+
+   或者使用更简洁的方式，通过 `OpenCVConfig.cmake` 自动定位：
+
+   ```cmake
+   if(WIN32 AND OpenCV_FOUND)
+       foreach(target_name my_target_1 my_target_2)
+           if(TARGET ${target_name})
+               add_custom_command(TARGET ${target_name} POST_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                       "${OpenCV_DIR}/bin/${CMAKE_BUILD_TYPE}/*.dll"
+                       "$<TARGET_FILE_DIR:${target_name}>"
+                   COMMENT "Copying OpenCV DLLs to ${target_name} output dir"
+               )
+           endif()
+       endforeach()
+   endif()
+   ```
+
+2. **运行脚本设置 PATH（开发调试用）**：
+
+   在 `run.ps1` / `run.sh` 启动脚本中临时追加 OpenCV DLL 目录到 `PATH`：
+
+   ```powershell
+   # run.ps1 (PowerShell)
+   $OpenCV_BIN = "D:\opencv\build\x64\vc16\bin"
+   $env:PATH = "$OpenCV_BIN;$env:PATH"
+   .\build\Debug\armor_demo.exe
+   ```
+
+3. **IDE 内直接运行（VS Code / Visual Studio）**：
+
+   - **VS Code**：在 `launch.json` 的 `"environment"` 中追加 `PATH`。
+   - **Visual Studio**：项目属性 → 调试 → 环境，添加 `PATH=D:\opencv\build\x64\vc16\bin;%PATH%`。
+
+4. **系统级安装 OpenCV 到 PATH**（不推荐）：将 OpenCV bin 目录永久添加到系统环境变量。缺点是与不同项目、不同 OpenCV 版本共存困难，且污染全局环境。
+
+**验收要求**：任意开发者 clone 仓库并完成构建后，无需手动配置环境变量即可通过 `cmake --build` 和后续脚本直接运行可执行文件，不应再出现 `找不到 DLL` 错误。
+
+**常见变体**：除 `opencv_world4100d.dll` 外，根据 OpenCV 版本和编译选项不同，可能遇到的 DLL 名称包括 `opencv_world480.dll`、`opencv_core4100.dll`、`opencv_imgproc4100.dll` 等。解决方案通用，只需调整 DLL 文件名或使用通配符复制。
+
+
+
 ## 12. 测试与验收计划
 
 | 测试编号 | 对应需求 | 测试内容 | 通过标准 |
@@ -439,9 +511,11 @@ Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构
 2. 每次提交只包含一个明确目的，避免同时提交算法修改、目录迁移和大批生成文件。
 3. 提交模型时先确认文件大小和许可证；大模型建议使用 Git LFS 或发布附件。
 4. `.gitignore` 应排除构建目录、IDE 文件、日志、标定临时文件和训练输出。
-5. Pull Request 描述应包含需求编号、实现说明、测试命令、测试结果和效果截图/视频。
-6. `main` 分支保持可构建；合并前必须完成对应自动测试与人工验收。
-7. 不得提交对 `learning/` 的修改。
+5. 每次生成新代码（新增模块、示例、测试、脚本、配置、模型文件、工具链脚本等）时，必须同步检查并更新 `.gitignore`：若新代码会产生构建产物、运行时日志、缓存、中间文件、生成数据或脚本输出，必须在提交前将对应路径或通配符加入 `.gitignore`，确保 `git status` 中不出现非预期的未跟踪文件。
+6. 所有工作日志（如开发调试日志、性能记录、临时调试输出）、运行时输出（如图像保存、结果 CSV、调试截图、训练日志、推理日志），无论存放路径如何，一律不得纳入 Git 版本控制，必须通过 `.gitignore` 排除。
+8. Pull Request 描述应包含需求编号、实现说明、测试命令、测试结果和效果截图/视频。
+9. `main` 分支保持可构建；合并前必须完成对应自动测试与人工验收。
+10. 不得提交对 `learning/` 的修改。
 
 ## 14. 实施里程碑
 
@@ -495,7 +569,7 @@ Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构
 
 实施前必须确认的 `TBD` 项目：
 
-1. YOLO 数据集、类别表、模型版本和部署后端；
+1. YOLO 数据集、类别表、输入尺寸、置信度阈值、NMS 阈值和目标精度；
 2. 数字分类模型的标签定义、输入尺寸和验收准确率；
 3. 摄像头型号、分辨率、标定内参和畸变参数；
 4. 装甲板大小类别与实际长宽；

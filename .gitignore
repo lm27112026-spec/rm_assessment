@@ -2,11 +2,9 @@
 # Build Artifacts
 # ============================================================
 build/
-build-opencv/
-build-win/
-build-win-opencv/
+build-*/
 cmake-build-*/
-cmake-build-*/
+out/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -73,6 +71,41 @@ core.*
 tmp/
 temp/
 *.tmp
+
+# ============================================================
+# Generated Outputs & Debug Artifacts
+# ============================================================
+# Result data - CSV, JSON dumps, evaluation reports
+result*/
+results/
+*.csv
+
+# Debug screenshots & captures
+debug*/
+capture*/
+screenshot*/
+snapshot*/
+
+# Training outputs (YOLO, digit classifier, etc.)
+runs/
+train*/
+*.pt
+*.pth
+*.pkl
+*.h5
+wandb/
+
+# Calibration temporary files
+calib*/
+calibration/
+
+# Inference runtime outputs
+inference_log*/
+inference_output/
+
+# Performance profiling
+*.prof
+perf/
 
 # ============================================================
 # Package Managers
