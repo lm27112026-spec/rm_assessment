@@ -54,6 +54,48 @@ function(copy_opencv_runtime_dlls target_name)
   endif()
 endfunction()
 
+# Copy MinGW/GCC runtime DLLs next to an executable. Used for targets that
+# don't depend on OpenCV but still need the C++ runtime when built with MinGW.
+function(copy_mingw_runtime_dlls target_name)
+  if(NOT MINGW)
+    return()
+  endif()
+  get_filename_component(_gcc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  foreach(_dll_name IN ITEMS libgcc_s_seh-1.dll libgcc_s_dw2-1.dll libstdc++-6.dll libwinpthread-1.dll)
+    set(_dll "${_gcc_bin}/${_dll_name}")
+    if(EXISTS "${_dll}")
+      add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" $<TARGET_FILE_DIR:${target_name}>)
+    endif()
+  endforeach()
+endfunction()
+
+# Sync a YOLO demo executable (plus its runtime DLLs) into the MinGW build's
+# tasks/ output directory. The MinGW build cannot compile OpenVINO-based
+# targets, so the MSVC build mirrors its self-contained exe + DLLs into
+# <source>/build/tasks/ so it can be run directly from there too.
+function(sync_yolo_demo_to_build_tasks target_name)
+  set(_dest "${CMAKE_SOURCE_DIR}/build/tasks")
+
+  add_custom_command(TARGET ${target_name} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_dest}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${target_name}>" "${_dest}"
+    COMMENT "Syncing ${target_name} to ${_dest}")
+
+  if(WIN32)
+    foreach(runtime_dir IN LISTS _YOLO_RUNTIME_PATHS)
+      if(EXISTS "${runtime_dir}")
+        file(GLOB runtime_dlls CONFIGURE_DEPENDS "${runtime_dir}/*.dll")
+        if(runtime_dlls)
+          add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${runtime_dlls} "${_dest}"
+            COMMAND_EXPAND_LISTS)
+        endif()
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
 function(set_test_working_directory test_name)
   set_tests_properties(${test_name} PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endfunction()

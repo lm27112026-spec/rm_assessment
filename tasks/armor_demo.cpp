@@ -30,6 +30,9 @@ struct DemoOptions
   std::string source;
   std::string model_path;
   std::size_t max_frames = 0U;
+  int width = 0;   // 0 = keep camera native resolution
+  int height = 0;  // 0 = keep camera native resolution
+  int fps = 0;     // 0 = keep camera native fps
 };
 
 bool looks_like_integer(const std::string & value)
@@ -77,8 +80,9 @@ DemoOptions parse_options(int argc, char ** argv)
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
     if (argument == "-h" || argument == "--help") {
-      std::cout << "Usage: armor_demo [--max-frames N] [source] [model_path]\n"
+      std::cout << "Usage: armor_demo [--max-frames N] [--width W] [--height H] [--fps F] [source] [model_path]\n"
                    "  --max-frames N: stop after processing N frames\n"
+                   "  --width W --height H --fps F: camera resolution/fps (lower res = faster capture)\n"
                    "  source: video file, camera index, or RTSP/HTTP URL\n"
                    "  model_path: optional OpenCV DNN ONNX digit classifier path\n";
       std::exit(0);
@@ -94,6 +98,36 @@ DemoOptions parse_options(int argc, char ** argv)
         std::exit(1);
       }
       options.max_frames = static_cast<std::size_t>(max_frames);
+      continue;
+    }
+    if (argument == "--width" || argument == "--height") {
+      if (i + 1 >= argc) {
+        std::cerr << argument << " requires an integer value\n";
+        std::exit(1);
+      }
+      int value = 0;
+      if (!parse_int(argv[++i], value) || value < 0) {
+        std::cerr << argument << " requires a non-negative integer\n";
+        std::exit(1);
+      }
+      if (argument == "--width") {
+        options.width = value;
+      } else {
+        options.height = value;
+      }
+      continue;
+    }
+    if (argument == "--fps") {
+      if (i + 1 >= argc) {
+        std::cerr << "--fps requires an integer value\n";
+        std::exit(1);
+      }
+      int value = 0;
+      if (!parse_int(argv[++i], value) || value < 0) {
+        std::cerr << "--fps requires a non-negative integer\n";
+        std::exit(1);
+      }
+      options.fps = value;
       continue;
     }
     positional.push_back(argument);
@@ -159,7 +193,9 @@ bool open_camera(cv::VideoCapture & capture, int preferred_index, int & opened_i
   }
 
 #ifdef _WIN32
-  const std::vector<int> backends = {cv::CAP_DSHOW};
+  // CAP_ANY (auto) is much faster than CAP_DSHOW on MinGW OpenCV
+  // (measured ~23fps vs ~10fps on the same camera); keep DSHOW as fallback.
+  const std::vector<int> backends = {cv::CAP_ANY, cv::CAP_DSHOW};
 #else
   const std::vector<int> backends = {cv::CAP_ANY};
 #endif
@@ -213,6 +249,21 @@ int main(int argc, char ** argv)
     return 1;
   }
 
+  // Lower camera resolution / set fps on request (high-res capture/decoding is
+  // usually what makes camera FPS drop; the detector itself runs at 100+ FPS).
+  if (options.width > 0 && options.height > 0) {
+    capture.set(cv::CAP_PROP_FRAME_WIDTH, options.width);
+    capture.set(cv::CAP_PROP_FRAME_HEIGHT, options.height);
+  }
+  if (options.fps > 0) {
+    capture.set(cv::CAP_PROP_FPS, options.fps);
+  }
+  if (looks_like_integer(options.source)) {
+    std::cout << "Camera: " << capture.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
+              << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << " @ "
+              << capture.get(cv::CAP_PROP_FPS) << " fps\n";
+  }
+
   std::cout << "Opened source: " << options.source << '\n';
   std::cout << "Digit model: " << options.model_path << " (" << (detector.has_model() ? "loaded" : "missing")
             << ")\n";
@@ -225,13 +276,9 @@ int main(int argc, char ** argv)
   cv::moveWindow(window_name, 40, 40);
   cv::setWindowProperty(window_name, cv::WND_PROP_TOPMOST, 1.0);
 
-  int frame_delay_ms = 1;
-  if (!looks_like_integer(options.source)) {
-    const double source_fps = capture.get(cv::CAP_PROP_FPS);
-    if (source_fps > 1.0 && source_fps <= 240.0) {
-      frame_delay_ms = std::clamp(static_cast<int>(1000.0 / source_fps), 1, 1000);
-    }
-  }
+  // Run at maximum throughput: waitKey(1) only pumps the window message loop,
+  // so the demo is limited by detection/IO speed rather than a per-frame sleep.
+  const int frame_delay_ms = 1;
 
   for (;;) {
     if (options.max_frames > 0U && state.frame_index >= options.max_frames) {
@@ -253,10 +300,13 @@ int main(int argc, char ** argv)
 
     const auto now = std::chrono::steady_clock::now();
     const double elapsed = std::chrono::duration<double>(now - state.last_tick).count();
-    if (elapsed > 0.0) {
-      state.fps = 1.0 / elapsed;
-    }
     state.last_tick = now;
+    if (elapsed > 0.0) {
+      // Exponential moving average: smooths out per-frame jitter from camera
+      // buffering (instantaneous fps otherwise spikes between blocked reads).
+      const double instantaneous = 1.0 / elapsed;
+      state.fps = (state.fps <= 0.0) ? instantaneous : (state.fps * 0.9 + instantaneous * 0.1);
+    }
 
     std::ostringstream hud;
     hud << source_label(options.source) << " | model: " << (detector.has_model() ? "loaded" : "missing")
