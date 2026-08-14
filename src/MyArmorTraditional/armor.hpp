@@ -1,88 +1,132 @@
-/**
- * @file armor.hpp
- * @brief 装甲板基础数据结构定义
- *
- * 【功能】
- * 定义装甲板视觉系统的基础公共类型与数据结构：
- *  - ArmorColor 枚举：表示装甲板颜色（红 / 蓝 / 未知）；
- *  - Lightbar 结构体：表示装甲板两侧的发光灯条，携带其颜色与几何信息
- *    （中心、上下端点、倾斜角、长度、宽度、长宽比、角度误差、最小外接矩形等）；
- *  - ArmorCandidate 结构体：表示由一对左右灯条构成的装甲板候选，
- *    携带中心、四角点、包围盒、归一化 ROI、灯条间距比、侧边比、
- *    矩形度误差以及去重标志等信息。
- *
- * 【方法】
- *  - to_string(ArmorColor)：将颜色枚举转换为可读字符串；
- *  - Lightbar 构造函数：由 cv::RotatedRect 与灯条 id 构造灯条并计算几何特征；
- *  - ArmorCandidate 构造函数：由左右两条灯条构造装甲板候选并计算几何特征。
- *
- * 【实现方式】
- *  - Lightbar：保存最小外接矩形，并在构造函数内通过角点排序派生
- *    上下端点、宽度（上边两端点距离）、长度（上下端点距离）、长宽比、
- *    倾斜角（atan2）与归一化角度误差；
- *  - ArmorCandidate：组合左右灯条的几何信息，计算中心中点、按
- *    左上/右上/右下/左下顺序排列的角点、灯条间距比、长宽比以及矩形度误差；
- *  - 全部几何量均在构造函数内完成，本文件仅作声明，实现见 armor.cpp。
- */
-#ifndef RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_
-#define RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_
+#ifndef AUTO_AIM__ARMOR_HPP
+#define AUTO_AIM__ARMOR_HPP
 
-#include <array>
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include <opencv2/core.hpp>
 
-namespace rm_assessment
+namespace auto_aim
 {
-
-enum class ArmorColor
+enum Color
 {
   red,
   blue,
-  unknown
+  purple
 };
+const std::vector<std::string> COLORS = {"red", "blue", "purple"};
 
-std::string to_string(ArmorColor color);
+enum ArmorType
+{
+  big,
+  small
+};
+const std::vector<std::string> ARMOR_TYPES = {"big", "small"};
+
+enum ArmorName
+{
+  one,
+  two,
+  three,
+  four,
+  five,
+  sentry,
+  outpost,
+  base,
+  not_armor
+};
+const std::vector<std::string> ARMOR_NAMES = {"one",    "two",     "three", "four",     "five",
+                                              "sentry", "outpost", "base",  "not_armor"};
+
+enum ArmorPriority
+{
+  first = 1,
+  second,
+  third,
+  forth,
+  fifth
+};
 
 struct Lightbar
 {
-  std::size_t id = 0U;
-  ArmorColor color = ArmorColor::unknown;
-  cv::Point2f center{};
-  cv::Point2f top{};
-  cv::Point2f bottom{};
-  cv::Point2f top_to_bottom{};
-  std::array<cv::Point2f, 2> points{};
-  double angle = 0.0;
-  double angle_error = 0.0;
-  double length = 0.0;
-  double width = 0.0;
-  double ratio = 0.0;
-  cv::RotatedRect rotated_rect{};
+  std::size_t id;
+  Color color;
+  cv::Point2f center, top, bottom, top2bottom;
+  std::vector<cv::Point2f> points;
+  double angle, angle_error, length, ratio;
 
-  Lightbar() = default;
-  Lightbar(const cv::RotatedRect & rect, std::size_t lightbar_id);
+  Lightbar(const cv::RotatedRect & rotated_rect, std::size_t id)
+  {
+    std::vector<cv::Point2f> corners(4);
+    rotated_rect.points(&corners[0]);
+    std::sort(corners.begin(), corners.end(), [](const cv::Point2f & a, const cv::Point2f & b) {
+      return a.y < b.y;
+    });
+
+    center = rotated_rect.center;
+    top = (corners[0] + corners[1]) / 2;
+    bottom = (corners[2] + corners[3]) / 2;
+    top2bottom = bottom - top;
+
+    points.emplace_back(top);
+    points.emplace_back(bottom);
+
+    auto width = cv::norm(corners[0] - corners[1]);
+    angle = std::atan2(top2bottom.y, top2bottom.x);
+    angle_error = std::abs(angle - CV_PI / 2);
+    length = cv::norm(top2bottom);
+    ratio = length / width;
+  };
 };
 
-struct ArmorCandidate
+struct Armor
 {
-  ArmorColor color = ArmorColor::unknown;
-  Lightbar left{};
-  Lightbar right{};
-  cv::Point2f center{};
-  std::array<cv::Point2f, 4> corners{};  // top-left, top-right, bottom-right, bottom-left
-  cv::Rect bounding_box{};
-  cv::Mat normalized_roi{};
-  double ratio = 0.0;
-  double side_ratio = 0.0;
-  double rectangular_error = 0.0;
-  bool duplicated = false;
+  Color color;
+  const Lightbar left, right;
+  cv::Point2f center;       // 不是对角线交点，不能作为实际中心！
+  cv::Point2f center_norm;  // 归一化坐标
+  std::vector<cv::Point2f> points;
 
-  ArmorCandidate() = default;
-  ArmorCandidate(const Lightbar & left_lightbar, const Lightbar & right_lightbar);
+  double ratio;              // 两灯条的中点连线与长灯条的长度之比
+  double side_ratio;         // 长灯条与短灯条的长度之比
+  double rectangular_error;  // 灯条和中点连线所成夹角与π/2的差值
+
+  ArmorType type;
+  ArmorName name;
+  ArmorPriority priority;
+  cv::Mat pattern;
+  double confidence;
+  bool duplicated;
+
+  double yaw_raw;  // rad
+
+  Armor(const Lightbar & left, const Lightbar & right) : left(left), right(right)
+  {
+    color = left.color;
+    center = (left.center + right.center) / 2;
+
+    points.emplace_back(left.top);
+    points.emplace_back(right.top);
+    points.emplace_back(right.bottom);
+    points.emplace_back(left.bottom);
+
+    auto left2right = right.center - left.center;
+    auto width = cv::norm(left2right);
+    auto max_lightbar_length = std::max(left.length, right.length);
+    auto min_lightbar_length = std::min(left.length, right.length);
+    ratio = width / max_lightbar_length;
+    side_ratio = max_lightbar_length / min_lightbar_length;
+
+    auto roll = std::atan2(left2right.y, left2right.x);
+    auto left_rectangular_error = std::abs(left.angle - roll - CV_PI / 2);
+    auto right_rectangular_error = std::abs(right.angle - roll - CV_PI / 2);
+    rectangular_error = std::max(left_rectangular_error, right_rectangular_error);
+  };
 };
 
-}  // namespace rm_assessment
+}  // namespace auto_aim
 
-#endif  // RM_ASSESSMENT_MY_ARMOR_TRADITIONAL_ARMOR_HPP_
+#endif  // AUTO_AIM__ARMOR_HPP

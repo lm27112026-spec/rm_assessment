@@ -1,340 +1,210 @@
-/**
- * @file detector.cpp
- * @brief 装甲板检测器的实现
- *
- * 【功能】
- * 实现 ArmorDetector 的完整检测流水线：从 BGR 图像中检测所有满足
- * 几何与颜色约束的装甲板候选，并为每个候选生成归一化 ROI 供数字识别使用。
- *
- * 【方法】
- *  - detect：主入口，依次执行 二值化 → 找灯条 → 按 x 排序 → 配对 → 去重；
- *  - build_binary_mask：通道分离后计算 R-B 与 B-R 差值并阈值化得到颜色掩码，
- *    再与亮度掩码（灰度阈值）求与，最后执行形态学闭/开运算去噪；
- *  - find_lightbars：findContours 提取外部轮廓 → minAreaRect 拟合 → 
- *    几何约束（面积/长宽比/角度/长度）过滤 → get_color 判定颜色；
- *  - pair_lightbars：双重循环对同色灯条检查间距比例与垂直偏移约束，
- *    通过几何校验后调用 fill_image_products 生成候选；
- *  - check_lightbar_geometry：长度、角度误差、长宽比约束；
- *  - check_armor_geometry：装甲长宽比、侧边比、矩形度误差约束；
- *  - get_color：遍历轮廓内像素累加红/蓝通道和，按差值阈值判定颜色；
- *  - fill_image_products：沿灯条方向（0.625 倍长度）扩展得到四角点，
- *    计算包围盒，并通过 getPerspectiveTransform + warpPerspective
- *    生成固定尺寸的归一化 ROI；
- *  - remove_duplicates：对共享灯条或重叠面积比 > 0.6 的候选，
- *    按评分（面积 /（1 + 矩形度误差 + 侧边比））保留较优者，标记另一为重复。
- *
- * 【实现方式】
- *  - 二值化：颜色差（R-B / B-R）与亮度同时成立才保留，可同时检出红、蓝灯条；
- *  - 灯条角度误差按与竖直方向偏差计算（见 armor.cpp 的归一化处理）；
- *  - 配对约束全部以“较长灯条长度”为基准做比例化，使阈值与目标距离/尺度解耦；
- *  - 去重同时考虑“共享灯条”与“包围盒重叠”两种重复来源，避免同一装甲被重复计数。
- */
 #include "detector.hpp"
 
 #include <algorithm>
-#include <cmath>
+#include <exception>
 #include <iterator>
-#include <numeric>
 
 #include <opencv2/imgproc.hpp>
 
-namespace rm_assessment
+namespace auto_aim
 {
+Detector::Detector() = default;
 
-namespace
+Detector::Detector(const std::string & model_path)
 {
-double deg_to_rad(const double degree)
-{
-  return degree * CV_PI / 180.0;
-}
-
-cv::Rect image_rect(const cv::Mat & image)
-{
-  return {0, 0, image.cols, image.rows};
-}
-
-cv::Rect safe_bounding_rect(const std::array<cv::Point2f, 4> & corners, const cv::Size & image_size)
-{
-  std::vector<cv::Point2f> points(corners.begin(), corners.end());
-  cv::Rect rect = cv::boundingRect(points);
-  rect &= cv::Rect(0, 0, image_size.width, image_size.height);
-  return rect;
-}
-
-double polygon_area(const std::array<cv::Point2f, 4> & corners)
-{
-  std::vector<cv::Point2f> points(corners.begin(), corners.end());
-  return std::abs(cv::contourArea(points));
-}
-
-double intersection_over_min_area(const ArmorCandidate & first, const ArmorCandidate & second)
-{
-  const cv::Rect intersection = first.bounding_box & second.bounding_box;
-  if (intersection.empty()) {
-    return 0.0;
+  if (model_path.empty()) {
+    return;
   }
-  const double intersection_area = static_cast<double>(intersection.area());
-  const double min_area = static_cast<double>(std::min(first.bounding_box.area(), second.bounding_box.area()));
-  if (min_area <= 0.0) {
-    return 0.0;
+
+  try {
+    net_ = cv::dnn::readNetFromONNX(model_path);
+    has_model_ = !net_.empty();
+  } catch (const cv::Exception &) {
+    net_ = cv::dnn::Net();
+    has_model_ = false;
+  } catch (const std::exception &) {
+    net_ = cv::dnn::Net();
+    has_model_ = false;
   }
-  return intersection_area / min_area;
-}
-}  // namespace
-
-ArmorDetector::ArmorDetector() = default;
-
-ArmorDetector::ArmorDetector(const Params & params) : params_(params) {}
-
-const ArmorDetector::Params & ArmorDetector::params() const
-{
-  return params_;
 }
 
-void ArmorDetector::set_params(const Params & params)
+bool Detector::has_model() const noexcept
 {
-  params_ = params;
+  return has_model_;
 }
 
-std::vector<ArmorCandidate> ArmorDetector::detect(const cv::Mat & bgr_image) const
+std::list<Armor> Detector::detect(const cv::Mat & bgr_img)
 {
-  if (bgr_image.empty() || bgr_image.cols <= 0 || bgr_image.rows <= 0 || bgr_image.channels() != 3) {
+  if (bgr_img.empty()) {
     return {};
   }
 
-  const cv::Mat binary_mask = build_binary_mask(bgr_image);
-  if (binary_mask.empty()) {
-    return {};
-  }
+  // 彩色图转灰度图
+  cv::Mat gray_img;
+  cv::cvtColor(bgr_img, gray_img, cv::COLOR_BGR2GRAY);
 
-  std::vector<Lightbar> lightbars = find_lightbars(bgr_image, binary_mask);
-  std::sort(lightbars.begin(), lightbars.end(), [](const Lightbar & a, const Lightbar & b) {
-    return a.center.x < b.center.x;
-  });
+  // 进行二值化
+  cv::Mat binary_img;
+  cv::threshold(gray_img, binary_img, 120, 255, cv::THRESH_BINARY);
 
-  std::vector<ArmorCandidate> armors = pair_lightbars(bgr_image, lightbars);
-  remove_duplicates(armors);
-  armors.erase(
-    std::remove_if(armors.begin(), armors.end(), [](const ArmorCandidate & armor) {
-      return armor.duplicated;
-    }),
-    armors.end());
-  return armors;
-}
-
-cv::Mat ArmorDetector::build_binary_mask(const cv::Mat & bgr_image) const
-{
-  cv::Mat channels[3];
-  cv::split(bgr_image, channels);
-
-  cv::Mat red_minus_blue;
-  cv::Mat blue_minus_red;
-  cv::subtract(channels[2], channels[0], red_minus_blue);
-  cv::subtract(channels[0], channels[2], blue_minus_red);
-
-  cv::Mat red_mask;
-  cv::Mat blue_mask;
-  cv::threshold(
-    red_minus_blue, red_mask, params_.color_difference_threshold, 255, cv::THRESH_BINARY);
-  cv::threshold(
-    blue_minus_red, blue_mask, params_.color_difference_threshold, 255, cv::THRESH_BINARY);
-
-  cv::Mat color_mask;
-  cv::bitwise_or(red_mask, blue_mask, color_mask);
-
-  cv::Mat gray;
-  cv::cvtColor(bgr_image, gray, cv::COLOR_BGR2GRAY);
-  cv::Mat bright_mask;
-  cv::threshold(gray, bright_mask, params_.brightness_threshold, 255, cv::THRESH_BINARY);
-
-  cv::Mat binary_mask;
-  cv::bitwise_and(color_mask, bright_mask, binary_mask);
-
-  const int kernel_size = std::max(1, params_.morph_kernel_size | 1);
-  const int iterations = std::max(0, params_.morph_iterations);
-  if (iterations > 0) {
-    const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {kernel_size, kernel_size});
-    cv::morphologyEx(binary_mask, binary_mask, cv::MORPH_CLOSE, kernel, {-1, -1}, iterations);
-    cv::morphologyEx(binary_mask, binary_mask, cv::MORPH_OPEN, kernel, {-1, -1}, iterations);
-  }
-  return binary_mask;
-}
-
-std::vector<Lightbar> ArmorDetector::find_lightbars(
-  const cv::Mat & bgr_image, const cv::Mat & binary_mask) const
-{
+  // 获取轮廓点
   std::vector<std::vector<cv::Point>> contours;
-  cv::Mat contour_mask = binary_mask.clone();
-  cv::findContours(contour_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+  cv::findContours(binary_img, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
 
-  std::vector<Lightbar> lightbars;
-  lightbars.reserve(contours.size());
-  std::size_t id = 0U;
-  const cv::Rect bounds = image_rect(bgr_image);
+  // 获取灯条
+  std::size_t lightbar_id = 0;
+  std::list<Lightbar> lightbars;
+  for (const auto & contour : contours) {
+    auto rotated_rect = cv::minAreaRect(contour);
+    auto lightbar = Lightbar(rotated_rect, lightbar_id);
 
-  for (const std::vector<cv::Point> & contour : contours) {
-    if (contour.size() < 2U || cv::contourArea(contour) < params_.min_contour_area) {
-      continue;
-    }
+    if (!check_geometry(lightbar)) continue;
 
-    const cv::RotatedRect rect = cv::minAreaRect(contour);
-    Lightbar lightbar(rect, id);
-    if (!check_lightbar_geometry(lightbar)) {
-      continue;
-    }
-
-    const cv::Rect bar_box = rect.boundingRect() & bounds;
-    if (bar_box.empty()) {
-      continue;
-    }
-
-    lightbar.color = get_color(bgr_image, contour);
-    if (lightbar.color == ArmorColor::unknown) {
-      continue;
-    }
-
-    lightbars.push_back(lightbar);
-    ++id;
+    lightbar.color = get_color(bgr_img, contour);
+    lightbars.emplace_back(lightbar);
+    lightbar_id += 1;
   }
 
-  return lightbars;
-}
+  // 将灯条从左到右排序
+  lightbars.sort([](const Lightbar & a, const Lightbar & b) { return a.center.x < b.center.x; });
 
-std::vector<ArmorCandidate> ArmorDetector::pair_lightbars(
-  const cv::Mat & bgr_image, const std::vector<Lightbar> & lightbars) const
-{
-  std::vector<ArmorCandidate> armors;
-  for (auto left = lightbars.begin(); left != lightbars.end(); ++left) {
-    for (auto right = std::next(left); right != lightbars.end(); ++right) {
-      if (left->color != right->color) {
-        continue;
-      }
+  // 获取装甲板
+  std::list<Armor> armors;
 
-      const double max_length = std::max(left->length, right->length);
-      const double horizontal_gap = static_cast<double>(right->center.x - left->center.x);
-      if (max_length <= 1e-6 || horizontal_gap <= max_length * params_.min_lightbar_gap_ratio ||
-        horizontal_gap >= max_length * params_.max_lightbar_gap_ratio) {
-        continue;
-      }
+  for (auto left = lightbars.begin(); left != lightbars.end(); left++) {
+    for (auto right = std::next(left); right != lightbars.end(); right++) {
+      if (left->color != right->color) continue;
 
-      const double vertical_delta = std::abs(static_cast<double>(left->center.y - right->center.y));
-      if (vertical_delta > max_length * params_.max_vertical_center_delta_ratio) {
-        continue;
-      }
+      auto armor = Armor(*left, *right);
+      if (!check_geometry(armor)) continue;
 
-      ArmorCandidate armor(*left, *right);
-      if (!check_armor_geometry(armor) || !fill_image_products(bgr_image, armor)) {
-        continue;
-      }
-      armors.push_back(armor);
+      armor.pattern = get_pattern(bgr_img, armor);
+
+      classify(armor);
+      if (!check_name(armor)) continue;
+
+      armors.emplace_back(armor);
     }
   }
+
   return armors;
 }
 
-bool ArmorDetector::check_lightbar_geometry(const Lightbar & lightbar) const
+bool Detector::check_geometry(const Lightbar & lightbar)
 {
-  const bool has_size = lightbar.length >= params_.min_lightbar_length && lightbar.width > 1e-6;
-  const bool angle_ok = lightbar.angle_error <= deg_to_rad(params_.max_lightbar_angle_error_deg);
-  const bool ratio_ok = lightbar.ratio >= params_.min_lightbar_ratio &&
-    lightbar.ratio <= params_.max_lightbar_ratio;
-  return has_size && angle_ok && ratio_ok;
+  auto angle_ok = (lightbar.angle_error * 57.3) < 45;  //degree
+  auto ratio_ok = lightbar.ratio > 1.5 && lightbar.ratio < 20;
+  auto length_ok = lightbar.length > 8;
+  return angle_ok && ratio_ok && length_ok;
 }
 
-bool ArmorDetector::check_armor_geometry(const ArmorCandidate & armor) const
+bool Detector::check_geometry(const Armor & armor)
 {
-  const bool ratio_ok = armor.ratio >= params_.min_armor_ratio && armor.ratio <= params_.max_armor_ratio;
-  const bool side_ratio_ok = armor.side_ratio <= params_.max_side_ratio;
-  const bool rectangular_ok = armor.rectangular_error <= deg_to_rad(params_.max_rectangular_error_deg);
-  return ratio_ok && side_ratio_ok && rectangular_ok;
+  auto ratio_ok = armor.ratio > 1 && armor.ratio < 5;
+  auto side_ratio_ok = armor.side_ratio < 1.5;
+  auto rectangular_error_ok = (armor.rectangular_error * 57.3) < 25;
+  return ratio_ok && side_ratio_ok && rectangular_error_ok;
 }
 
-ArmorColor ArmorDetector::get_color(
-  const cv::Mat & bgr_image, const std::vector<cv::Point> & contour) const
+bool Detector::check_name(const Armor & armor)
 {
-  double red_sum = 0.0;
-  double blue_sum = 0.0;
-  int valid_points = 0;
-  const cv::Rect bounds = image_rect(bgr_image);
+  auto name_ok = armor.name != ArmorName::not_armor;
+  auto confidence_ok = armor.confidence > 0.8;
 
-  for (const cv::Point & point : contour) {
+  return name_ok && confidence_ok;
+}
+
+Color Detector::get_color(const cv::Mat & bgr_img, const std::vector<cv::Point> & contour)
+{
+  int red_sum = 0, blue_sum = 0;
+  const cv::Rect bounds(0, 0, bgr_img.cols, bgr_img.rows);
+
+  for (const auto & point : contour) {
     if (!bounds.contains(point)) {
       continue;
     }
-    const cv::Vec3b pixel = bgr_image.at<cv::Vec3b>(point);
-    blue_sum += static_cast<double>(pixel[0]);
-    red_sum += static_cast<double>(pixel[2]);
-    ++valid_points;
+    red_sum += bgr_img.at<cv::Vec3b>(point)[2];
+    blue_sum += bgr_img.at<cv::Vec3b>(point)[0];
   }
 
-  if (valid_points == 0) {
-    return ArmorColor::unknown;
-  }
-  if (red_sum > blue_sum + params_.color_difference_threshold * valid_points * 0.25) {
-    return ArmorColor::red;
-  }
-  if (blue_sum > red_sum + params_.color_difference_threshold * valid_points * 0.25) {
-    return ArmorColor::blue;
-  }
-  return ArmorColor::unknown;
+  return blue_sum > red_sum ? Color::blue : Color::red;
 }
 
-bool ArmorDetector::fill_image_products(const cv::Mat & bgr_image, ArmorCandidate & armor) const
+cv::Mat Detector::get_pattern(const cv::Mat & bgr_img, const Armor & armor)
 {
-  const cv::Point2f left_extension = armor.left.top_to_bottom * 0.625F;
-  const cv::Point2f right_extension = armor.right.top_to_bottom * 0.625F;
-  armor.corners = {
-    armor.left.center - left_extension, armor.right.center - right_extension,
-    armor.right.center + right_extension, armor.left.center + left_extension};
-  armor.center = std::accumulate(
-                   armor.corners.begin(), armor.corners.end(), cv::Point2f(0.0F, 0.0F)) *
-    0.25F;
+  // 延长灯条获得装甲板角点
+  // 1.125 = 0.5 * armor_height / lightbar_length = 0.5 * 126mm / 56mm
+  auto tl = armor.left.center - armor.left.top2bottom * 1.125;
+  auto bl = armor.left.center + armor.left.top2bottom * 1.125;
+  auto tr = armor.right.center - armor.right.top2bottom * 1.125;
+  auto br = armor.right.center + armor.right.top2bottom * 1.125;
 
-  if (polygon_area(armor.corners) < params_.min_contour_area) {
-    return false;
+  auto roi_left = std::max<int>(std::min(tl.x, bl.x), 0);
+  auto roi_top = std::max<int>(std::min(tl.y, tr.y), 0);
+  auto roi_right = std::min<int>(std::max(tr.x, br.x), bgr_img.cols);
+  auto roi_bottom = std::min<int>(std::max(bl.y, br.y), bgr_img.rows);
+  auto roi_tl = cv::Point(roi_left, roi_top);
+  auto roi_br = cv::Point(roi_right, roi_bottom);
+  auto roi = cv::Rect(roi_tl, roi_br);
+
+  if (roi.width <= 0 || roi.height <= 0) {
+    return cv::Mat();
   }
 
-  armor.bounding_box = safe_bounding_rect(armor.corners, bgr_image.size());
-  if (armor.bounding_box.empty()) {
-    return false;
-  }
-
-  const cv::Size roi_size(
-    std::max(1, params_.normalized_roi_size.width), std::max(1, params_.normalized_roi_size.height));
-  const std::array<cv::Point2f, 4> dst = {
-    cv::Point2f(0.0F, 0.0F), cv::Point2f(static_cast<float>(roi_size.width - 1), 0.0F),
-    cv::Point2f(static_cast<float>(roi_size.width - 1), static_cast<float>(roi_size.height - 1)),
-    cv::Point2f(0.0F, static_cast<float>(roi_size.height - 1))};
-
-  const cv::Mat transform = cv::getPerspectiveTransform(armor.corners.data(), dst.data());
-  if (transform.empty()) {
-    return false;
-  }
-  cv::warpPerspective(
-    bgr_image, armor.normalized_roi, transform, roi_size, cv::INTER_LINEAR, cv::BORDER_REPLICATE);
-  return !armor.normalized_roi.empty();
+  return bgr_img(roi);
 }
 
-void ArmorDetector::remove_duplicates(std::vector<ArmorCandidate> & armors) const
+void Detector::classify(Armor & armor)
 {
-  for (auto first = armors.begin(); first != armors.end(); ++first) {
-    for (auto second = std::next(first); second != armors.end(); ++second) {
-      const bool share_lightbar = first->left.id == second->left.id || first->left.id == second->right.id ||
-        first->right.id == second->left.id || first->right.id == second->right.id;
-      const bool overlap = intersection_over_min_area(*first, *second) > 0.6;
-      if (!share_lightbar && !overlap) {
-        continue;
-      }
-
-      const double first_score = first->bounding_box.area() / (1.0 + first->rectangular_error + first->side_ratio);
-      const double second_score = second->bounding_box.area() / (1.0 + second->rectangular_error + second->side_ratio);
-      if (first_score >= second_score) {
-        second->duplicated = true;
-      } else {
-        first->duplicated = true;
-      }
-    }
+  if (!has_model_) {
+    armor.name = ArmorName::not_armor;
+    armor.confidence = 0.0;
+    return;
   }
+
+  if (armor.pattern.empty()) {
+    armor.name = ArmorName::not_armor;
+    armor.confidence = 0.0;
+    return;
+  }
+
+  cv::Mat gray;
+  cv::cvtColor(armor.pattern, gray, cv::COLOR_BGR2GRAY);
+
+  auto input = cv::Mat(32, 32, CV_8UC1, cv::Scalar(0));
+  auto x_scale = static_cast<double>(32) / gray.cols;
+  auto y_scale = static_cast<double>(32) / gray.rows;
+  auto scale = std::min(x_scale, y_scale);
+  auto h = static_cast<int>(gray.rows * scale);
+  auto w = static_cast<int>(gray.cols * scale);
+
+  if (w <= 0 || h <= 0) {
+    armor.name = ArmorName::not_armor;
+    armor.confidence = 0.0;
+    return;
+  }
+
+  auto roi = cv::Rect(0, 0, w, h);
+  cv::resize(gray, input(roi), {w, h});
+
+  auto blob = cv::dnn::blobFromImage(input, 1.0 / 255.0, cv::Size(), cv::Scalar());
+
+  net_.setInput(blob);
+  cv::Mat outputs = net_.forward();
+
+  // softmax
+  float max = *std::max_element(outputs.begin<float>(), outputs.end<float>());
+  cv::exp(outputs - max, outputs);
+  float sum = cv::sum(outputs)[0];
+  outputs /= sum;
+
+  double confidence;
+  cv::Point label_point;
+  cv::minMaxLoc(outputs.reshape(1, 1), nullptr, &confidence, nullptr, &label_point);
+  int label_id = label_point.x;
+
+  armor.confidence = confidence;
+  armor.name = static_cast<ArmorName>(label_id);
 }
 
-}  // namespace rm_assessment
+}  // namespace auto_aim

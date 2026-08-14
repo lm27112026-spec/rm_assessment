@@ -48,17 +48,64 @@
 | --- | --- | --- | --- |
 | 摄像头封装 | 已具备基础实现 | `src/MyCamera/myCamera.hpp`、`src/MyCamera/myCamera.cpp` | 公有接口仅包含构造、析构和 `read`；私有变量均以 `_` 结尾；支持无 OpenCV 时 fake 模式降级编译 |
 | 摄像头示例 | 已具备 | `io/example.cpp` | 支持摄像头源参数和画面显示 |
-| 传统视觉检测 | 已具备基础实现 | `src/MyArmorTraditional/detector.*`、`src/MyArmorTraditional/armor.*` | 包含颜色/亮度分割、灯条筛选、灯条配对、装甲板候选和透视归一化 ROI |
-| 数字识别 | 已具备基础实现 | `src/MyArmorTraditional/digit_recognizer.*` | 通过 OpenCV DNN 加载 ONNX 分类模型 |
-| 目标跟随 | 已具备基础实现 | `src/MyArmorTraditional/tracker.*` | 使用卡尔曼滤波和状态机维持目标 |
-| 综合演示 | 已具备基础实现 | `tasks/armor_demo.cpp` | 串联检测、识别、跟踪与可视化 |
+| 传统视觉检测 | 已具备基础实现 | `src/MyArmorTraditional/detector.*`、`src/MyArmorTraditional/armor.hpp`、`src/MyArmorTraditional/img_tools.hpp` | 固定阈值二值化、灯条筛选、灯条配对、装甲板候选（`auto_aim` 命名空间） |
+| 数字识别 | 已具备基础实现 | `src/MyArmorTraditional/detector.cpp`（整合在 `auto_aim::Detector` 内） | 通过 OpenCV DNN 加载 ONNX 分类模型，作为检测门控 |
+| 目标跟随 | 已具备基础实现 | `tasks/detection_tracker.hpp`（YOLO demo 用） | 轻量卡尔曼跟踪器 `rm_assessment::DetectionTracker` |
+| 综合演示 | 已具备基础实现 | `tasks/armor_demo.cpp` | 串联检测、分类与可视化 |
 | 自动测试 | 已具备部分测试 | `tests/` | 覆盖摄像头接口、合成灯条检测、模型异常处理、跟踪状态转换和 YOLO 推理 |
 | YOLO 检测 | 已具备基础实现 | `src/MyArmorYolo/yolov5.*`、`src/MyArmorYolo/yolov5_utils.*`、`models/yolov5/` | YOLOv5 OpenVINO 推理，`YOLOV5Detector` 类（命名空间 `rm_assessment::yolov5`），输出带颜色/数字分类的 `Detection` 结构；`learning/` 内相关 YOLO 代码仅作只读参考 |
 | 上下位机通信 | 已具备基础实现 | `communication/`、`stm32/` | PC 端 `mySerial` 跨平台串口类 + `frame` 帧构造/解析（`0xAA + 12B payload + 0xBB`）；STM32 端 UART 环形缓冲 + 帧解析状态机 + SSD1306 OLED 显示 |
-| 距离/姿态解算 | 待实现（发挥项） | 无正式项目模块 | `learning/tasks/auto_aim/solver.*` 可只读参考其 PnP 和重投影思路 |
+| 距离/姿态解算 | 已部分实现（发挥项） | `tasks/yolov5_pnp_demo.cpp` | YOLOv5 检测结合 `cv::solvePnP`（`SOLVEPNP_IPPE`）解算装甲板位姿，含距离输出、重投影校验与坐标轴 Y/P/R 绘制；`learning/tasks/auto_aim/solver.*` 可只读参考 |
 | 父子级 CMake | 已具备基础实现（发挥项） | 根 `CMakeLists.txt` + `src/MyCamera/`、`src/MyArmorTraditional/`、`src/MyArmorYolo/`、`communication/`、`tasks/`、`tests/` 各子模块 `CMakeLists.txt` | 根工程通过 `add_subdirectory` 统一管理各模块；YOLO 通过 `YOLO_WITH_OPENVINO` 选项按需启用 |
 
 “已具备基础实现”不等同于完成最终验收。传统视觉、数字模型、摄像头跨平台行为和跟踪鲁棒性仍需使用实验室装甲板与真实视频验证。
+
+### 3.1 已冻结参数（2026-08-12）
+
+以下参数已经过确认并冻结，后续开发和验收以此为准：
+
+| 领域 | 参数 | 冻结值 | 说明 |
+|---|---|---|---|
+| **YOLOv5 模型** | 输入尺寸 | 640×640 | `yolov5.cpp:prepare_input()` |
+| | 置信度阈值 | 0.7 | `YOLOV5Detector::confidence_threshold_` |
+| | NMS 阈值 | 0.3 | `YOLOV5Detector::nms_threshold_` |
+| | 输出格式 | 22 列 (score + 4 color + 8 corners + 9 digits) | `yolov5_utils.hpp` 常量 |
+| | 模型来源 | 公开/预训练模型 | 需补充训练数据集和 License 说明 |
+| | 推理后端 | OpenVINO (CPU) | `YOLO_WITH_OPENVINO` CMake 选项 |
+| **数字识别** | 模型文件 | `learning/assets/tiny_resnet.onnx` | 9 类: one~five, sentry, outpost, base, not_armor |
+| | 输入尺寸 | 32×32 灰度图 | `Detector::classify()` |
+| | 类别映射 | 0-8 → `ArmorName`（one~five / sentry / outpost / base / not_armor） | `Detector::classify()` 内 softmax 取最大类 |
+| **传统视觉** | 检测参数 | 灰度阈值 120 及几何阈值常量 | `detector.cpp` 内常量，无 `Params` 结构体 |
+| | 跟踪参数 | max_match=120px, max_temp_lost=8 | `DetectionTracker::Params`（仅 YOLO demo） |
+| **装甲板尺寸** | 灯条高度 | 56 mm | 与 `learning/tasks/auto_aim/solver.cpp` 一致 |
+| | 小装甲板宽度 | 135 mm | 同上 |
+| | 大装甲板宽度 | 230 mm | 同上 |
+| **相机内参** | 当前 fallback | fx=1818.37, fy=1822.49, cx=751.06, cy=530.44 | `calibration/camera_params.yaml`，**需实际标定后替换**；标定程序见 `calibration/calibrate_camera.cpp` |
+| **串口协议** | 波特率 | 115200 8N1 | `docs/protocol.md` v1.0 已冻结 |
+| | 帧格式 | 14 字节: 0xAA + 12B LE payload + 0xBB | XOR 校验 (offset 0-10 → offset 11) |
+| | 时序 | PC 端 20 Hz (50ms) | STM32 端 UART RX ISR → ring buffer → main loop parse |
+| **STM32** | MCU | STM32F103C8T6 (Blue Pill) | `stm32/README.md` |
+| | OLED | SSD1306 128×64 I2C (地址 0x3C) | PB6(SCL)/PB7(SDA), 3.3V |
+| | 引脚 | PA9(TX), PA10(RX), PC13(LED) | 已烧录验证 |
+| **验收阈值** | 传统视觉 FPS | ≥ 100 fps | 目标平台实际分辨率下 |
+| | YOLO FPS | ≥ 30 fps | OpenVINO CPU 推理 |
+| | 传统视觉 Recall | ≥ 85% | 实验室真实装甲板视频 |
+| | 传统视觉 Precision | ≥ 80% | 同上 |
+| | 数字识别准确率 | ≥ 85% (数字 1-5) | 固定验证集上统计 |
+| | YOLO mAP@0.5 | ≥ 0.85 | 独立测试集评估 |
+| | YOLO 跟踪 ID 跳变 | < 5 次/分钟 | 真实视频连续跟踪 |
+| | 距离误差 | 1-3m 范围平均 < 10%, 最大 < 20% | PnP 解算 vs 实测距离 |
+| | 姿态重投影误差 | < 5 px | 坐标轴方向需定性正确 |
+| | 通信正确率 | ≥ 99.9% (1000 帧) | 错误帧注入后 5 帧内恢复同步 |
+| **开发约束** | `learning/` 只读 | 任何提交不得包含 `learning/` 变更 | `git diff -- learning` 必须为空 |
+
+### 3.2 仍需后续确认的 TBD
+
+| 待确认项 | 影响 | 确认方式 |
+|---|---|---|
+| 相机内参（实际标定值） | PnP 距离/姿态精度 | 用实验室摄像头拍摄标定板，运行 `calibration/calibrate_camera.cpp`，替换 `calibration/camera_params.yaml` 中的 fallback 值 |
+| YOLO 训练数据集来源和 License | 文档完整性 | 在模型说明中补充数据集来源、版本、许可证 |
+| 字符编码 (MSVC C4819 警告) | 构建警告 | 统一源文件为 UTF-8 BOM 或调整 MSVC 编译选项 |
 
 ## 4. 功能需求总表
 
@@ -71,16 +118,16 @@
 | FR-05 | 使用 GitHub 管理代码 | 必做 | 已具备仓库 | 提交历史清晰，主分支可复现构建 |
 | FR-06 | 传统视觉框选完整装甲板 | 必做 | 已具备基础实现 | 实验室装甲板视频中稳定输出完整框 |
 | FR-07 | 传统视觉目标跟随 | 必做 | 已具备基础实现 | 短暂漏检时仍保持预测，重新出现后恢复跟踪 |
-| FR-08 | 装甲板数字识别 | 必做 | 已具备基础实现 | 在约定测试集上输出数字与置信度，精度达到验收阈值 |
-| FR-09 | YOLO 系列装甲板框选 | 必做 | 已具备基础实现 | 模型能对视频逐帧输出装甲板检测框和置信度 |
-| FR-10 | YOLO 检测结果跟随 | 必做 | 已具备基础实现 | 检测结果接入统一跟踪器，输出连续目标轨迹 |
-| FR-11 | PC 与 STM32 通信链路 | 必做 | 已具备基础实现 | PC 发送、STM32 正确解析并在 OLED 显示 |
+| FR-08 | 装甲板数字识别 | 必做 | 已具备基础实现 | 在固定验证集上数字 1-5 识别准确率 ≥ 85% |
+| FR-09 | YOLO 系列装甲板框选 | 必做 | 已具备基础实现 | 模型能对视频逐帧输出装甲板检测框和置信度，mAP@0.5 ≥ 0.85 |
+| FR-10 | YOLO 检测结果跟随 | 必做 | 已具备基础实现 | 检测结果接入统一跟踪器，输出连续目标轨迹，ID 跳变 < 5 次/分钟 |
+| FR-11 | PC 与 STM32 通信链路 | 必做 | 已具备基础实现 | PC 发送 1000 帧正确率 ≥ 99.9%，STM32 正确解析并在 OLED 显示，错误帧注入后 5 帧内恢复同步 |
 | FR-12 | 帧格式为 `0xAA + 数据 + 0xBB` | 必做 | 已具备基础实现 | 错帧被丢弃，合法帧能完整解析 |
 | EX-01 | 题目2、3、4分别封装为独立模块并分类存放：`MyArmorTraditional`、`MyArmorYolo`、`communication`/`mySerial` | 发挥项 | 已具备基础实现 | 类职责清晰，模块间通过明确接口通信 |
 | EX-02 | 使用父子级 CMake 管理各模块 | 发挥项 | 已具备基础实现 | 根工程一次配置即可构建各库、示例和测试 |
 | EX-03 | 鲁棒识别旋转装甲板灯条并框选整块装甲板 | 发挥项 | 待增强 | 旋转、倾斜和一定模糊条件下仍能获得正确角点 |
-| EX-04 | 解算装甲板与摄像头距离 | 发挥项 | 待实现 | 与实测距离比较，误差满足约定阈值 |
-| EX-05 | 解算装甲板三维姿态并绘制坐标系 | 发挥项 | 待实现 | 图像中坐标轴方向稳定且符合实际摆放姿态 |
+| EX-04 | 解算装甲板与摄像头距离 | 发挥项 | 已部分实现 | `tasks/yolov5_pnp_demo.cpp` 已实现 `cv::solvePnP` 距离解算；需验证 1-3m 范围平均误差 < 10%、最大误差 < 20% |
+| EX-05 | 解算装甲板三维姿态并绘制坐标系 | 发挥项 | 已部分实现 | `tasks/yolov5_pnp_demo.cpp` 已实现坐标轴投影与 Y/P/R 角度显示；需验证重投影误差 < 5px，坐标轴方向定性正确 |
 
 ## 5. 题目1：myCamera 跨平台封装
 
@@ -121,48 +168,47 @@ bool read(cv::Mat & img,
 2. **灯条几何筛选**：按轮廓面积、长宽比、长度、方向角等条件剔除噪声。
 3. **灯条配对**：按颜色、长度比、角度差、中心高度差、间距比例等条件组成装甲板。
 4. **完整框选**：计算左右灯条构成的四角点、外接框和中心点。
-5. **ROI 归一化**：使用透视变换把装甲板区域映射为固定尺寸图像，供数字识别使用。
-6. **数字识别**：使用 OpenCV DNN 运行 ONNX 分类模型，输出标签、数字、置信度和可靠性状态。
-7. **目标跟随**：根据中心距离、尺寸和颜色选择同一目标，使用卡尔曼滤波平滑并预测。
+5. **ROI 生成**：沿灯条方向扩展（1.125 倍灯条长度）得到装甲板 ROI，供分类使用。
+6. **数字识别**：使用 OpenCV DNN 运行 ONNX 分类模型，输出类别（`ArmorName`）和置信度，并作为检测门控过滤误检。
+7. **目标跟随**（YOLO demo）：根据中心距离选择同一目标，使用轻量卡尔曼滤波平滑并预测。
 8. **结果显示**：绘制候选四边形、跟踪框、中心点、数字、置信度、状态和 FPS。
 
 ### 6.2 传统视觉算法流程
 
 ```text
 BGR 图像
- -> 灰度亮度阈值 + 红蓝通道差
- -> 形态学去噪
+ -> 灰度化 + 固定阈值(120)二值化
  -> findContours
  -> minAreaRect 获取旋转矩形
  -> 灯条几何与颜色筛选
  -> 灯条两两配对
- -> 装甲板几何校验与候选去重
- -> 四角点排序、透视矫正
- -> 数字分类
- -> Tracker 目标关联与卡尔曼更新
+ -> 装甲板几何校验
+ -> 沿灯条方向扩展得到 ROI，ONNX 分类
+ -> 置信度>0.8 且非 not_armor 才保留
  -> 绘制结果
 ```
 
-检测阈值需要放入参数结构或配置文件，不能散落为不可解释的常量。真实验收前应采集不同距离、角度、曝光、背景和运动速度下的数据进行调参。
+检测阈值以常量形式集中在 `detector.cpp`。真实验收前应采集不同距离、角度、曝光、背景和运动速度下的数据进行调参。
 
 ### 6.3 数字识别方案
 
-预计优先复用现有 `DigitRecognizer`：
+识别已整合进 `auto_aim::Detector`：
 
-1. 对透视归一化后的 ROI 做灰度化、尺寸统一和数值归一化。
-2. 通过 OpenCV DNN 加载 ONNX 分类模型。
-3. 对网络 logits 计算概率，低于置信度阈值时输出 `Unknown`，避免强制误分类。
-4. 模型路径不可用时安全降级，检测和跟踪仍应继续运行。
+1. 对灯条扩展得到的装甲板 ROI 做灰度化、尺寸统一和数值归一化。
+2. 通过 OpenCV DNN 加载 ONNX 分类模型（`Detector` 构造时加载一次，路径可配）。
+3. 对网络 logits 做数值稳定 softmax，取最大类别写入 `Armor::name`。
+4. 置信度低于 0.8 或类别为 `not_armor` 时该候选被丢弃，避免误检。
 5. 使用真实装甲板图像建立独立验证集，记录混淆矩阵、准确率和低置信度比例。
 
 分类模型来源、类别定义、输入尺寸和最终精度目标均为 `TBD`，须以招新群数据或实际模型说明为准。
 
 ### 6.4 跟随方案
 
-现有 `Tracker` 采用八维恒速卡尔曼状态：中心位置、中心速度、宽高和宽高变化率。跟踪状态包括：
+传统视觉 demo（`armor_demo`）直接输出每帧检测结果，不做时序跟踪。
+
+YOLO demo（`yolov5_armor_demo`）使用 `rm_assessment::DetectionTracker`（`tasks/detection_tracker.hpp`），四维恒速卡尔曼跟踪框中心，状态包括：
 
 - `lost`：无有效目标；
-- `detecting`：候选连续性尚未达到确认阈值；
 - `tracking`：目标已确认并持续更新；
 - `temp_lost`：短暂漏检，使用预测框维持输出。
 
@@ -300,6 +346,7 @@ rm_assessment/
 ├── CMakeLists.txt
 ├── cmake/
 │   └── helpers.cmake
+├── run.ps1 / run.sh                 # 跨平台构建与运行脚本
 ├── io/
 │   └── example.cpp                  # 题目1 示例（仅此文件保留在 io/）
 ├── src/
@@ -308,10 +355,9 @@ rm_assessment/
 │   │   └── myCamera.hpp/.cpp        # 题目1：myCamera 跨平台封装（支持无 OpenCV fake 模式）
 │   ├── MyArmorTraditional/
 │   │   ├── CMakeLists.txt
-│   │   ├── armor.hpp/.cpp
+│   │   ├── armor.hpp
 │   │   ├── detector.hpp/.cpp
-│   │   ├── digit_recognizer.hpp/.cpp
-│   │   └── tracker.hpp/.cpp         # 题目2：传统视觉 + 识别 + 跟随
+│   │   └── img_tools.hpp           # 题目2：传统视觉 + 识别（auto_aim 命名空间）
 │   └── MyArmorYolo/
 │       ├── CMakeLists.txt
 │       ├── yolov5.hpp/.cpp
@@ -325,12 +371,26 @@ rm_assessment/
 │       └── loopback_test.cpp        # 端到端回环测试（1000 帧）
 ├── stm32/
 │   ├── task4_serial.ioc             # CubeMX 工程文件
-│   ├── Core/                        # HAL 源码（UART 环缓/帧解析/OLED）
+│   ├── Makefile                     # arm-none-eabi-gcc 命令行构建
+│   ├── Core/
+│   │   ├── Inc/
+│   │   │   ├── frame_parser.h       # 帧解析状态机 API（WAIT_HEADER → READING_PAYLOAD → WAIT_FOOTER）
+│   │   │   ├── uart_ring.h          # UART 环形缓冲区 API（ISR-safe, 256B）
+│   │   │   ├── ssd1306.h            # SSD1306 OLED 文本驱动 API（I2C, 6×8 字体）
+│   │   │   └── ...                  # HAL 配置、GPIO、I2C、USART、中断声明
+│   │   └── Src/
+│   │       ├── frame_parser.c       # 帧解析实现（固定 12B payload + XOR 校验）
+│   │       ├── uart_ring.c          # 中断驱动环形缓冲实现
+│   │       ├── ssd1306.c            # SSD1306 I2C 文本渲染与 page flush
+│   │       ├── main.c               # 主循环：轮询解析 → 刷新 OLED → LED 心跳
+│   │       └── ...                  # HAL 初始化与中断服务
 │   └── README.md                    # 独立构建说明（不接入根 CMake）
 ├── tasks/
 │   ├── CMakeLists.txt
 │   ├── armor_demo.cpp               # 传统视觉综合演示
-│   ├── yolov5_armor_demo.cpp        # YOLOv5 检测演示
+│   ├── yolov5_armor_demo.cpp        # YOLOv5 检测 + 跟随演示
+│   ├── detection_tracker.hpp        # YOLO 演示用轻量卡尔曼跟踪器
+│   ├── yolov5_pnp_demo.cpp          # YOLOv5 + PnP 位姿解算演示（发挥项 EX-04/05）
 │   ├── serial_demo.cpp              # 视觉→串口集成演示
 │   └── serial_loopback.cpp          # PC 端回环工具（硬件缺席保底）
 ├── tests/
@@ -338,16 +398,19 @@ rm_assessment/
 │   ├── myCamera_test.cpp            # 摄像头接口测试
 │   ├── myCamera_interface_test.cpp  # 接口合规测试
 │   ├── armor_vision_test.cpp        # 传统视觉测试
-│   └── yolov5_test.cpp              # YOLO 推理测试
+│   ├── yolov5_test.cpp              # YOLO 推理测试
+│   └── output/                      # 测试输出目录
 ├── docs/
 │   ├── assessment-requirements.md   # 本文档
 │   └── protocol.md                  # 题目4 串口协议
 ├── models/
-│   └── yolov5/                      # YOLOv5 模型文件
+│   └── yolov5/                      # YOLOv5 模型文件（yolov5.xml + yolov5.bin）
 └── learning/                        # 只读，不参与修改
 ```
 
-各模块集中于 `src/` 下按题目2/题目3分类；演示程序和测试只依赖公开目标与头文件目录，不通过相对路径耦合内部布局。
+各模块集中于 `src/` 下按题目2/题目3分类，题目4保持在 `communication/` 与 `stm32/` 中。发挥项 EX-04/05 的 PnP 位姿解算由 `tasks/yolov5_pnp_demo.cpp` 独立实现，复用 `YOLOV5Detector` 检测结果后调用 `cv::solvePnP`。演示程序和测试只依赖公开目标与头文件目录，不通过相对路径耦合内部布局。
+
+STM32 固件工程通过 `stm32/Makefile` 支持 `arm-none-eabi-gcc` 命令行构建，`Core/Inc/` 中的 `frame_parser.h`、`uart_ring.h`、`ssd1306.h` 分别封装帧解析状态机、UART 环形缓冲和 OLED 文本驱动，与上位机 `communication/frame.hpp` 共享一致的 `#pragma pack(1)` payload 结构体定义。
 
 ### 9.2 父子级 CMake
 
@@ -439,6 +502,8 @@ Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构
 
 ### 11.1 Windows 运行时 DLL 搜索路径问题
 
+> **已解决**：本项目已通过 `cmake/helpers.cmake` 的 `copy_opencv_runtime_dlls` 函数，在构建后自动把 OpenCV 与 MinGW 运行时 DLL 复制到各可执行文件同目录（应用于 `armor_demo`、`serial_demo`、`armor_vision_test`、`mycamera_test`）。以下为问题分析与历史方案说明。
+
 **问题**：Windows 下构建成功后，直接双击或命令行运行可执行文件时，弹出系统错误对话框提示找不到 `opencv_world4100d.dll`（Debug 配置）或 `opencv_world4100.dll`（Release 配置），程序无法启动。这是 OpenCV 动态链接库不在 Windows DLL 搜索路径中导致的，属于本项目最常见的运行时错误之一。
 
 **根因**：Windows 加载 DLL 时按以下顺序搜索：可执行文件所在目录 → 系统目录（`System32`）→ `PATH` 环境变量 → 当前工作目录。CMake 构建的可执行文件位于 `build/<config>/` 子目录中，而 OpenCV 的 DLL 位于 OpenCV 安装目录的 `bin/` 下，两者不在同一目录且 `PATH` 中通常不含该路径，因此运行时加载失败。
@@ -513,16 +578,16 @@ Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构
 | 测试编号 | 对应需求 | 测试内容 | 通过标准 |
 | --- | --- | --- | --- |
 | T-01 | FR-01~FR-04 | 构建并检查 `myCamera` 接口、命名、取流和时间戳 | 两平台构建成功，接口与命名满足硬约束 |
-| T-02 | FR-06 | 合成灯条与真实装甲板检测 | 合成测试通过，真实数据达到约定召回率 |
+| T-02 | FR-06 | 合成灯条与真实装甲板检测 | 合成测试通过，真实数据 Recall ≥ 85%, Precision ≥ 80% |
 | T-03 | FR-07 | 匀速移动、快速移动和短时遮挡跟踪 | 状态转换正确，轨迹稳定，丢失后可恢复 |
-| T-04 | FR-08 | 数字分类测试集 | 输出混淆矩阵和准确率，达到 `TBD` 阈值 |
-| T-05 | FR-09 | YOLO 独立测试集评估 | 输出 Precision、Recall、mAP 并达到 `TBD` 阈值 |
-| T-06 | FR-10 | YOLO 视频跟踪 | 跟踪连续，ID 跳变率满足 `TBD` 阈值 |
-| T-07 | FR-11~FR-12 | 1000 帧串口循环和错误帧注入 | 合法帧正确率达到约定值，错误帧不更新显示 |
+| T-04 | FR-08 | 数字分类测试集 | 输出混淆矩阵和准确率，数字 1-5 ≥ 85% |
+| T-05 | FR-09 | YOLO 独立测试集评估 | 输出 Precision、Recall、mAP，mAP@0.5 ≥ 0.85 |
+| T-06 | FR-10 | YOLO 视频跟踪 | 跟踪连续，ID 跳变率 < 5 次/分钟 |
+| T-07 | FR-11~FR-12 | 1000 帧串口循环和错误帧注入 | 合法帧正确率 ≥ 99.9%，错误帧不更新显示，5 帧内恢复同步 |
 | T-08 | EX-02 | 全新构建目录配置和编译 | 根命令一次构建全部启用模块 |
-| T-09 | EX-03 | 多角度、多转速旋转装甲板视频 | 完整框选召回率达到 `TBD` 阈值 |
-| T-10 | EX-04 | 多个已知距离测量 | 平均误差和最大误差达到 `TBD` 阈值 |
-| T-11 | EX-05 | 已知姿态与坐标轴投影 | 轴方向正确，重投影误差低于 `TBD` 阈值 |
+| T-09 | EX-03 | 多角度、多转速旋转装甲板视频 | 完整框选召回率 ≥ 85% |
+| T-10 | EX-04 | 多个已知距离测量 | 1-3m 范围平均误差 < 10%，最大误差 < 20% |
+| T-11 | EX-05 | 已知姿态与坐标轴投影 | 轴方向正确，重投影误差 < 5px |
 | T-12 | 全部 | `learning/` 只读门禁 | `git status --short -- learning` 无输出 |
 
 每个算法测试应记录：数据集版本、参数文件、模型哈希、运行平台、图像分辨率、帧率、准确率指标和失败样例。不得只展示一段效果良好的视频作为全部验收证据。
@@ -576,28 +641,36 @@ Windows 和 Ubuntu 应在 GitHub Actions 或两台真实环境上分别执行构
 
 ## 15. 风险与待确认事项
 
+### 15.1 已解决的风险（现已确认或冻结）
+
+以下风险已在 2026-08-12 参数冻结中解决，详见 §3.1 参数冻结表：
+
+| 原风险项 | 确认结果 |
+|---|---|
+| 数据集尚未确定 | YOLO 模型为公开/预训练模型，数据集来源和 License 待补充到文档 |
+| 数字模型类别说明不完整 | 已确认 9 类: one~five, sentry, outpost, base, not_armor; 0-8 → `ArmorName` |
+| 装甲板物理尺寸未知 | 已确认: 灯条 56mm, 小装甲板 135mm, 大装甲板 230mm |
+| 串口数据字段未定义 | 已冻结: `docs/protocol.md` v1.0, 14 字节帧, 12B LE payload, XOR 校验 |
+| STM32/OLED 型号未知 | 已确认: STM32F103C8T6, SSD1306 128×64 I2C (0x3C) |
+| YOLO 仅输出矩形框 | 已确认 22 列输出格式含 8 个角点坐标 |
+| FPS/识别率/距离误差等验收阈值未定义 | 已冻结全部验收阈值，见 §3.1 |
+
+### 15.2 剩余风险
+
 | 风险/待确认项 | 影响 | 处理方式 |
-| --- | --- | --- |
-| 数据集尚未确定 | 无法确定 YOLO 类别和模型接口 | 优先获取招新群数据并冻结版本 |
-| 数字模型类别说明不完整 | 标签映射可能错误 | 核对训练配置和模型输出维度 |
-| 相机内参与畸变未知 | 距离和姿态结果不可用 | 使用实际摄像头重新标定 |
-| 装甲板物理尺寸未知 | PnP 尺度不成立 | 实测或获取官方规格，统一单位 |
-| YOLO 仅输出矩形框 | PnP 角点精度不足 | 使用关键点模型或角点细化 |
-| 串口数据字段未定义 | PC/STM32 无法联调 | 先冻结 payload 字段、长度、单位和字节序 |
-| STM32/OLED 型号未知 | 驱动和引脚无法确定 | 获取实验室具体型号和原理图 |
+|---|---|---|
+| 相机内参未标定 | 距离和姿态精度依赖 fallback 值 | 用实验室摄像头拍摄标定板，获取实际内参和畸变系数 |
 | 光照与运动模糊 | 传统视觉漏检 | 参数化阈值、补光、曝光控制和数据增强 |
 | 平面 PnP 多解与抖动 | 姿态跳变 | 重投影筛选、时序连续性和滤波 |
 | Windows/Ubuntu 依赖差异 | 构建或运行不一致 | 目标级 CMake、CI 和真实设备双重测试 |
 
-实施前必须确认的 `TBD` 项目：
+### 15.3 剩余 TBD
 
-1. YOLO 数据集、类别表、输入尺寸、置信度阈值、NMS 阈值和目标精度；
-2. 数字分类模型的标签定义、输入尺寸和验收准确率；
-3. 摄像头型号、分辨率、标定内参和畸变参数；
-4. 装甲板大小类别与实际长宽；
-5. STM32 型号、OLED 接口、电平和引脚；
-6. 串口波特率、payload 字段、字段长度、单位和字节序；
-7. FPS、识别率、距离误差、姿态误差和通信正确率的最终验收阈值。
+实施前必须完成的唯一确认项：
+
+1. **相机标定**：使用实际摄像头重新标定，获取内参矩阵和畸变系数，替换 `calibration/camera_params.yaml` 中的 fallback 值（运行 `calibration/calibrate_camera.cpp` 完成标定）。
+
+其余所有参数已冻结，详见 §3.1。后续如需调整，必须同步更新本文档的冻结参数表。
 
 ## 16. 最终交付物
 

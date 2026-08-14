@@ -52,7 +52,7 @@ struct DemoOptions
   std::string source = "0";
   std::string model_path = "models/yolov5/yolov5.xml";
   std::string device = "CPU";
-  std::string config_path = "learning/configs/demo.yaml";
+  std::string config_path = "calibration/camera_params.yaml";
   std::string camera_matrix_csv;
   std::string dist_coeffs_csv;
   bool big_armor = false;  // false = small armor
@@ -124,7 +124,7 @@ void print_usage()
                "  --max-frames N: stop after processing N frames\n"
                "  --device DEVICE: OpenVINO device name (default CPU)\n"
                "  --config PATH: YAML config with camera_matrix/distort_coeffs "
-               "(default learning/configs/demo.yaml)\n"
+               "(default calibration/camera_params.yaml)\n"
                "  --camera-matrix CSV9: explicit 3x3 intrinsics, 9 comma-separated values\n"
                "  --dist-coeffs CSV5: explicit distortion coefficients, 5 comma-separated values\n"
                "  --armor-size small|big: physical armor size (default small)\n"

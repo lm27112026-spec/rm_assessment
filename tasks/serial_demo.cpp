@@ -1,14 +1,16 @@
 // Wave 3 Task 13: vision-to-serial integration demo.
-// Reads frames via io::myCamera, runs the armor_vision pipeline
-// (ArmorDetector + DigitRecognizer + Tracker), converts the tracker
-// output into a frame::Payload, and sends it over serial at 20 Hz.
+// Reads frames via io::myCamera, runs the auto_aim::Detector pipeline,
+// converts the best armor into a frame::Payload, and sends it over serial at 20 Hz.
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <list>
 #include <memory>
 #include <string>
 #include <thread>
@@ -18,11 +20,10 @@
 
 #include "armor.hpp"
 #include "detector.hpp"
-#include "digit_recognizer.hpp"
 #include "frame.hpp"
+#include "img_tools.hpp"
 #include "myCamera.hpp"
 #include "mySerial.hpp"
-#include "tracker.hpp"
 
 namespace
 {
@@ -81,25 +82,30 @@ Config parse_args(int argc, char ** argv)
   return cfg;
 }
 
-// Pick the recognized digit of the candidate closest to the tracked center.
-// Returns 255 (unknown) when no candidate is near the tracked position.
-int digit_for_tracked_target(
-  const std::vector<rm_assessment::ArmorCandidate> & candidates,
-  const std::vector<int> & digits,
-  const cv::Point2f & tracked_center)
+// Map ArmorName to the digit byte carried by frame::Payload.
+// 1..5 for the numbered armors, 255 (unknown) for sentry/outpost/base/not_armor.
+uint8_t digit_from_armor_name(auto_aim::ArmorName name)
 {
-  int best_digit = 255;
-  float best_distance = std::numeric_limits<float>::max();
-  for (std::size_t i = 0; i < candidates.size(); ++i) {
-    const float dx = candidates[i].center.x - tracked_center.x;
-    const float dy = candidates[i].center.y - tracked_center.y;
-    const float distance = dx * dx + dy * dy;
-    if (distance < best_distance) {
-      best_distance = distance;
-      best_digit = digits[i];
+  switch (name) {
+    case auto_aim::one: return 1;
+    case auto_aim::two: return 2;
+    case auto_aim::three: return 3;
+    case auto_aim::four: return 4;
+    case auto_aim::five: return 5;
+    default: return 255;
+  }
+}
+
+// Pick the highest-confidence armor as the serial target.
+const auto_aim::Armor * best_armor(const std::list<auto_aim::Armor> & armors)
+{
+  const auto_aim::Armor * best = nullptr;
+  for (const auto & armor : armors) {
+    if (best == nullptr || armor.confidence > best->confidence) {
+      best = &armor;
     }
   }
-  return best_digit;
+  return best;
 }
 
 }  // namespace
@@ -130,9 +136,7 @@ int main(int argc, char ** argv)
   }
 
   // Vision pipeline
-  rm_assessment::ArmorDetector detector;
-  rm_assessment::DigitRecognizer recognizer(cfg.model_path);
-  rm_assessment::Tracker tracker;
+  auto_aim::Detector detector(cfg.model_path);
 
   io::myCamera cam(cfg.video_source);
 
@@ -145,7 +149,7 @@ int main(int argc, char ** argv)
 
   log_msg("[serial_demo] Starting...");
   log_msg("[serial_demo] source=" + cfg.video_source +
-          " model=" + (recognizer.has_model() ? "loaded" : "missing") +
+          " model=" + (detector.has_model() ? "loaded" : "missing") +
           " serial=" + (serial ? cfg.port : "(none)") +
           " no_send=" + (cfg.no_send ? "yes" : "no"));
 
@@ -154,31 +158,22 @@ int main(int argc, char ** argv)
       continue;
     }
 
-    // Detection + digit recognition
-    std::vector<rm_assessment::ArmorCandidate> candidates = detector.detect(frame);
-    std::vector<int> digits(candidates.size(), 255);
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-      const rm_assessment::RecognitionResult result = recognizer.recognize(candidates[i]);
-      if (result.reliable && result.digit >= 0 && result.digit <= 9) {
-        digits[i] = result.digit;
-      }
-    }
+    // Detection + classification (gated by confidence > 0.8 and name != not_armor)
+    const std::list<auto_aim::Armor> armors = detector.detect(frame);
+    const auto_aim::Armor * target = best_armor(armors);
 
-    // Tracking
-    tracker.update(candidates, frame.size());
-
-    // Build payload from tracker output
+    // Build payload from the best armor
     frame::Payload payload{};
     payload.frame_counter = serial_frame_counter;
-    payload.tracker_state = static_cast<uint8_t>(tracker.state_value());
+    payload.tracker_state = 0;
     payload.distance = 0;  // EX-04 PnP not implemented
 
-    if (tracker.has_target()) {
-      const cv::Point2f center = tracker.tracked_center();
+    if (target != nullptr) {
       payload.target_present = 1;
-      payload.target_x = static_cast<int16_t>(cvRound(center.x));
-      payload.target_y = static_cast<int16_t>(cvRound(center.y));
-      payload.digit = static_cast<uint8_t>(digit_for_tracked_target(candidates, digits, center));
+      payload.target_x = static_cast<int16_t>(cvRound(target->center.x));
+      payload.target_y = static_cast<int16_t>(cvRound(target->center.y));
+      payload.digit = digit_from_armor_name(target->name);
+      payload.tracker_state = 2;  // "tracking" (this pipeline has no Kalman tracker)
     } else {
       payload.target_present = 0;
       payload.target_x = 0;
@@ -201,13 +196,18 @@ int main(int argc, char ** argv)
     ++frame_count;
 
     // Display
-    if (tracker.has_target()) {
-      const cv::Rect2f box = tracker.tracked_box();
-      cv::rectangle(frame, box, {0, 255, 255}, 2, cv::LINE_AA);
-      cv::circle(frame, tracker.tracked_center(), 4, {0, 255, 255}, cv::FILLED, cv::LINE_AA);
+    for (const auto & armor : armors) {
+      tools::draw_points(frame, armor.points, {0, 255, 0}, 2);
     }
-    cv::putText(frame, "serial_demo | tracker: " + tracker.state() + " | FC:" + std::to_string(serial_frame_counter),
-                cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+    if (target != nullptr) {
+      tools::draw_points(frame, target->points, {0, 255, 255}, 2);
+      cv::circle(
+        frame, cv::Point(cvRound(target->center.x), cvRound(target->center.y)), 4, {0, 255, 255},
+        cv::FILLED, cv::LINE_AA);
+    }
+    cv::putText(
+      frame, "serial_demo | FC:" + std::to_string(serial_frame_counter), cv::Point(10, 30),
+      cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
     cv::imshow("serial_demo", frame);
 
     const int key = cv::waitKey(1);

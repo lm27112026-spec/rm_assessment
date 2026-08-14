@@ -12,8 +12,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
-#include "armor.hpp"
-#include "tracker.hpp"
+#include "detection_tracker.hpp"
 #include "yolov5.hpp"
 
 namespace
@@ -169,7 +168,7 @@ int main(int argc, char ** argv)
   }
 
   rm_assessment::yolov5::YOLOV5Detector detector(options.model_path, options.device);
-  rm_assessment::Tracker tracker;
+  rm_assessment::DetectionTracker tracker;
 
   cv::VideoCapture capture;
   if (looks_like_integer(options.source)) {
@@ -213,45 +212,21 @@ int main(int argc, char ** argv)
     const auto detections = detector.detect(frame);
     total_detections += detections.size();
 
-    std::vector<rm_assessment::ArmorCandidate> candidates;
-    candidates.reserve(detections.size());
+    std::vector<cv::Rect2f> boxes;
+    boxes.reserve(detections.size());
     for (const auto & detection : detections) {
-      rm_assessment::ArmorCandidate candidate;
-      candidate.corners = detection.corners;
-      if (detection.color_id == 0) {
-        candidate.color = rm_assessment::ArmorColor::blue;
-      } else if (detection.color_id == 1) {
-        candidate.color = rm_assessment::ArmorColor::red;
-      } else {
-        candidate.color = rm_assessment::ArmorColor::unknown;
-      }
-      candidate.center =
-        (candidate.corners[0] + candidate.corners[1] + candidate.corners[2] + candidate.corners[3]) * 0.25f;
-      cv::Point2f min_point = candidate.corners[0];
-      cv::Point2f max_point = candidate.corners[0];
-      for (std::size_t index = 1; index < candidate.corners.size(); ++index) {
-        min_point.x = std::min(min_point.x, candidate.corners[index].x);
-        min_point.y = std::min(min_point.y, candidate.corners[index].y);
-        max_point.x = std::max(max_point.x, candidate.corners[index].x);
-        max_point.y = std::max(max_point.y, candidate.corners[index].y);
-      }
-      candidate.bounding_box = cv::Rect(
-        cvRound(min_point.x), cvRound(min_point.y),
-        cvRound(max_point.x - min_point.x), cvRound(max_point.y - min_point.y));
-      candidates.push_back(std::move(candidate));
+      boxes.push_back(detection.box);
+      draw_detection(frame, detection);
     }
 
-    const bool tracked = tracker.update(candidates, frame.size());
+    const bool tracked = tracker.update(boxes, frame.size());
     if (tracked && tracker.has_target()) {
       ++tracker_hits;
     }
 
-    for (const auto & detection : detections) {
-      draw_detection(frame, detection);
-    }
     if (tracker.has_target()) {
       cv::rectangle(frame, tracker.tracked_box(), {0, 255, 255}, 2, cv::LINE_AA);
-      cv::putText(frame, "tracker " + tracker.state(), {12, 24}, cv::FONT_HERSHEY_SIMPLEX, 0.6,
+      cv::putText(frame, "tracker " + tracker.state_str(), {12, 24}, cv::FONT_HERSHEY_SIMPLEX, 0.6,
         {0, 255, 255}, 2, cv::LINE_AA);
     }
 
