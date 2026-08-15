@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -520,13 +521,13 @@ void draw_pose_target(
           << " Z=" << pose.distance_z << "m";
     cv::putText(
       frame, first.str(), {cvRound(detection.box.x), line_y}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
-      {0, 255, 255}, 1, cv::LINE_AA);
+      {0, 255, 0}, 1, cv::LINE_AA);
     std::ostringstream second;
     second << "YPR(cam)=" << std::fixed << std::setprecision(1) << pose.yaw_deg << "/"
            << pose.pitch_deg << "/" << pose.roll_deg << "deg";
     cv::putText(
       frame, second.str(), {cvRound(detection.box.x), line_y + 16}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
-      {0, 255, 255}, 1, cv::LINE_AA);
+      {0, 255, 0}, 1, cv::LINE_AA);
   } else {
     std::ostringstream label;
     label << "pose rejected";
@@ -545,6 +546,7 @@ void draw_pose_target(
 
 int main(int argc, char ** argv)
 {
+  try {
   const DemoOptions options = parse_options(argc, argv);
 
   if (!fs::exists(options.model_path)) {
@@ -657,4 +659,8 @@ int main(int argc, char ** argv)
   std::cout << "Pose solved: " << pose_solved << '\n';
   std::cout << "Pose rejected: " << pose_rejected << '\n';
   return 0;
+  } catch (const std::exception & error) {
+    std::cerr << "yolov5_pnp_demo failed: " << error.what() << '\n';
+    return 1;
+  }
 }
