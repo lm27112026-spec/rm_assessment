@@ -13,5 +13,9 @@ int main()
   static_assert(std::is_same<decltype(&io::myCamera::read),
                   bool (io::myCamera::*)(cv::Mat &, std::chrono::steady_clock::time_point &)>::value,
     "myCamera::read must match the required interface");
+  static_assert(std::is_same<decltype(&io::myCamera::setExposure), bool (io::myCamera::*)(double)>::value,
+    "myCamera::setExposure must match the required interface");
+  static_assert(std::is_same<decltype(&io::myCamera::getExposure), double (io::myCamera::*)() const>::value,
+    "myCamera::getExposure must match the required interface");
   return 0;
 }

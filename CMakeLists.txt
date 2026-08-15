@@ -41,6 +41,12 @@ endif()
 
 if(OpenCV_FOUND)
   add_subdirectory(src/MyArmorTraditional MyArmorTraditional)
+
+  add_executable(exposure_tune src/MyCamera/exposure_tune.cpp)
+  target_link_libraries(exposure_tune PRIVATE mycamera armor_vision)
+  set_target_properties(exposure_tune PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/MyCamera")
+  copy_opencv_runtime_dlls(exposure_tune)
+
   add_subdirectory(communication)
 
   if(YOLO_WITH_OPENVINO)

@@ -111,6 +111,8 @@ public:
   ~myCamera();
 
   bool read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
+  bool setExposure(double exposure);
+  double getExposure() const;
 
 private:
   std::string source_;
@@ -119,6 +121,7 @@ private:
   std::size_t frame_index_;
   int width_;
   int height_;
+  double exposure_;
 };
 
 }  // namespace io

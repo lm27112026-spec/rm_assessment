@@ -19,7 +19,8 @@ myCamera::myCamera(const std::string & source)
     opened_(false),
     frame_index_(0),
     width_(640),
-    height_(480)
+    height_(480),
+    exposure_(0.0)
 {
 #ifdef MY_CAMERA_HAS_OPENCV
   if (source_.empty()) {
@@ -75,6 +76,36 @@ bool myCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
   ++frame_index_;
   return true;
 #endif
+}
+
+bool myCamera::setExposure(double exposure)
+{
+  exposure_ = exposure;
+
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (!capture_.isOpened()) {
+    return false;
+  }
+
+  capture_.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25);
+  return capture_.set(cv::CAP_PROP_EXPOSURE, exposure);
+#else
+  return true;
+#endif
+}
+
+double myCamera::getExposure() const
+{
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (capture_.isOpened()) {
+    const double exposure = capture_.get(cv::CAP_PROP_EXPOSURE);
+    if (exposure != 0.0) {
+      return exposure;
+    }
+  }
+#endif
+
+  return exposure_;
 }
 
 }  // namespace io

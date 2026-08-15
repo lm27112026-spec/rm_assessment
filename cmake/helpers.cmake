@@ -2,7 +2,10 @@ function(copy_yolo_runtime_dlls target_name)
   if(WIN32)
     foreach(runtime_dir IN LISTS _YOLO_RUNTIME_PATHS)
       if(EXISTS "${runtime_dir}")
-        file(GLOB runtime_dlls CONFIGURE_DEPENDS "${runtime_dir}/*.dll")
+        file(GLOB runtime_dlls "${runtime_dir}/*.dll")
+        if(MSVC)
+          list(FILTER runtime_dlls EXCLUDE REGEX "(_64d|[0-9]d)\\.dll$")
+        endif()
         if(runtime_dlls)
           add_custom_command(TARGET ${target_name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${runtime_dlls} $<TARGET_FILE_DIR:${target_name}>
@@ -31,7 +34,10 @@ function(copy_opencv_runtime_dlls target_name)
 
   foreach(_bin IN LISTS _opencv_bin_candidates)
     if(EXISTS "${_bin}")
-      file(GLOB _opencv_dlls CONFIGURE_DEPENDS "${_bin}/*.dll")
+      file(GLOB _opencv_dlls "${_bin}/*.dll")
+      if(MSVC)
+        list(FILTER _opencv_dlls EXCLUDE REGEX "(_64d|[0-9]d)\\.dll$")
+      endif()
       if(_opencv_dlls)
         add_custom_command(TARGET ${target_name} POST_BUILD
           COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_opencv_dlls} $<TARGET_FILE_DIR:${target_name}>
@@ -85,7 +91,10 @@ function(sync_yolo_demo_to_build_tasks target_name)
   if(WIN32)
     foreach(runtime_dir IN LISTS _YOLO_RUNTIME_PATHS)
       if(EXISTS "${runtime_dir}")
-        file(GLOB runtime_dlls CONFIGURE_DEPENDS "${runtime_dir}/*.dll")
+        file(GLOB runtime_dlls "${runtime_dir}/*.dll")
+        if(MSVC)
+          list(FILTER runtime_dlls EXCLUDE REGEX "(_64d|[0-9]d)\\.dll$")
+        endif()
         if(runtime_dlls)
           add_custom_command(TARGET ${target_name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${runtime_dlls} "${_dest}"
