@@ -34,6 +34,7 @@ endif()
 include(cmake/helpers.cmake)
 
 add_subdirectory(src/MyCamera MyCamera)
+add_subdirectory(src/MySerial MySerial)
 
 if(YOLO_WITH_OPENVINO AND NOT OpenCV_FOUND)
   message(FATAL_ERROR "YOLO_WITH_OPENVINO requires OpenCV. Set OpenCV_DIR or disable YOLO_WITH_OPENVINO.")
@@ -47,7 +48,7 @@ if(OpenCV_FOUND)
   set_target_properties(exposure_tune PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/MyCamera")
   copy_opencv_runtime_dlls(exposure_tune)
 
-  add_subdirectory(communication)
+  add_subdirectory(src/communication communication)
 
   if(YOLO_WITH_OPENVINO)
     if(WIN32 AND NOT MSVC)

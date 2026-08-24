@@ -54,9 +54,9 @@
 | 综合演示 | 已具备基础实现 | `tasks/armor_demo.cpp` | 串联检测、分类与可视化 |
 | 自动测试 | 已具备部分测试 | `tests/` | 覆盖摄像头接口、合成灯条检测、模型异常处理、跟踪状态转换和 YOLO 推理 |
 | YOLO 检测 | 已具备基础实现 | `src/MyArmorYolo/yolov5.*`、`src/MyArmorYolo/yolov5_utils.*`、`models/yolov5/` | YOLOv5 OpenVINO 推理，`YOLOV5Detector` 类（命名空间 `rm_assessment::yolov5`），输出带颜色/数字分类的 `Detection` 结构；`learning/` 内相关 YOLO 代码仅作只读参考 |
-| 上下位机通信 | 已具备基础实现 | `communication/`、`stm32/` | PC 端 `mySerial` 跨平台串口类 + `frame` 帧构造/解析（`0xAA + 12B payload + 0xBB`）；STM32 端 UART 环形缓冲 + 帧解析状态机 + SSD1306 OLED 显示 |
+| 上下位机通信 | 已具备基础实现 | `src/MySerial/`、`src/communication/`、`stm32/` | PC 端 `MySerial` 跨平台串口类 + `frame` 帧构造/解析（`0xAA + 12B payload + 0xBB`）；STM32 端 UART 环形缓冲 + 帧解析状态机 + SSD1306 OLED 显示 |
 | 距离/姿态解算 | 已部分实现（发挥项） | `tasks/yolov5_pnp_demo.cpp` | YOLOv5 检测结合 `cv::solvePnP`（`SOLVEPNP_IPPE`）解算装甲板位姿，含距离输出、重投影校验与坐标轴 Y/P/R 绘制；`learning/tasks/auto_aim/solver.*` 可只读参考 |
-| 父子级 CMake | 已具备基础实现（发挥项） | 根 `CMakeLists.txt` + `src/MyCamera/`、`src/MyArmorTraditional/`、`src/MyArmorYolo/`、`communication/`、`tasks/`、`tests/` 各子模块 `CMakeLists.txt` | 根工程通过 `add_subdirectory` 统一管理各模块；YOLO 通过 `YOLO_WITH_OPENVINO` 选项按需启用 |
+| 父子级 CMake | 已具备基础实现（发挥项） | 根 `CMakeLists.txt` + `src/MyCamera/`、`src/MyArmorTraditional/`、`src/MyArmorYolo/`、`src/communication/`、`tasks/`、`tests/` 各子模块 `CMakeLists.txt` | 根工程通过 `add_subdirectory` 统一管理各模块；YOLO 通过 `YOLO_WITH_OPENVINO` 选项按需启用 |
 
 “已具备基础实现”不等同于完成最终验收。传统视觉、数字模型、摄像头跨平台行为和跟踪鲁棒性仍需使用实验室装甲板与真实视频验证。
 
@@ -123,7 +123,7 @@
 | FR-10 | YOLO 检测结果跟随 | 必做 | 已具备基础实现 | 检测结果接入统一跟踪器，输出连续目标轨迹，ID 跳变 < 5 次/分钟 |
 | FR-11 | PC 与 STM32 通信链路 | 必做 | 已具备基础实现 | PC 发送 1000 帧正确率 ≥ 99.9%，STM32 正确解析并在 OLED 显示，错误帧注入后 5 帧内恢复同步 |
 | FR-12 | 帧格式为 `0xAA + 数据 + 0xBB` | 必做 | 已具备基础实现 | 错帧被丢弃，合法帧能完整解析 |
-| EX-01 | 题目2、3、4分别封装为独立模块并分类存放：`MyArmorTraditional`、`MyArmorYolo`、`communication`/`mySerial` | 发挥项 | 已具备基础实现 | 类职责清晰，模块间通过明确接口通信 |
+| EX-01 | 题目2、3、4分别封装为独立模块并分类存放：`MyArmorTraditional`、`MyArmorYolo`、`communication`/`MySerial` | 发挥项 | 已具备基础实现 | 类职责清晰，模块间通过明确接口通信 |
 | EX-02 | 使用父子级 CMake 管理各模块 | 发挥项 | 已具备基础实现 | 根工程一次配置即可构建各库、示例和测试 |
 | EX-03 | 鲁棒识别旋转装甲板灯条并框选整块装甲板 | 发挥项 | 待增强 | 旋转、倾斜和一定模糊条件下仍能获得正确角点 |
 | EX-04 | 解算装甲板与摄像头距离 | 发挥项 | 已部分实现 | `tasks/yolov5_pnp_demo.cpp` 已实现 `cv::solvePnP` 距离解算；需验证 1-3m 范围平均误差 < 10%、最大误差 < 20% |
@@ -303,7 +303,7 @@ struct Detection {
 
 ### 8.3 上位机预计实现
 
-定义 `mySerial` 或 `myCommunication` 类，负责：
+定义 `MySerial` 或 `myCommunication` 类，负责：
 
 - 跨平台打开和关闭串口；
 - 配置波特率、数据位、停止位和校验位；
@@ -339,7 +339,7 @@ STM32 工程建议独立存放，不与主机 C++ 目标混合编译，但应在
 
 ### 9.1 类封装与目录分类
 
-项目按以下结构组织。题目1、2、3分别由 `MyCamera`、`MyArmorTraditional`、`MyArmorYolo` 管理；题目4保持在已独立建模的 `communication` 和 `stm32` 目录中：
+项目按以下结构组织。题目1、2、3分别由 `MyCamera`、`MyArmorTraditional`、`MyArmorYolo` 管理；题目4保持在已独立建模的 `src/MySerial`、`src/communication` 和 `stm32` 目录中：
 
 ```text
 rm_assessment/
@@ -362,13 +362,15 @@ rm_assessment/
 │       ├── CMakeLists.txt
 │       ├── yolov5.hpp/.cpp
 │       └── yolov5_utils.hpp/.cpp    # 题目3：YOLOv5 OpenVINO 检测（YOLO_WITH_OPENVINO 启用）
-├── communication/
-│   ├── CMakeLists.txt
-│   ├── frame.hpp/.cpp               # 帧构造/解析（0xAA + 12B payload + 0xBB）
-│   ├── mySerial.hpp/.cpp            # 跨平台串口类（Win32/termios）
-│   └── tests/
-│       ├── frame_test.cpp           # 帧单元测试（10 用例）
-│       └── loopback_test.cpp        # 端到端回环测试（1000 帧）
+│   ├── MySerial/
+│   │   ├── CMakeLists.txt
+│   │   └── MySerial.hpp/.cpp         # 题目4：PC 端跨平台串口类（Win32/termios）
+│   └── communication/
+│       ├── CMakeLists.txt
+│       ├── frame.hpp/.cpp            # 帧构造/解析（0xAA + 12B payload + 0xBB）
+│       └── tests/
+│           ├── frame_test.cpp        # 帧单元测试（10 用例）
+│           └── loopback_test.cpp     # 端到端回环测试（1000 帧）
 ├── stm32/
 │   ├── task4_serial.ioc             # CubeMX 工程文件
 │   ├── Makefile                     # arm-none-eabi-gcc 命令行构建
@@ -408,9 +410,9 @@ rm_assessment/
 └── learning/                        # 只读，不参与修改
 ```
 
-各模块集中于 `src/` 下按题目2/题目3分类，题目4保持在 `communication/` 与 `stm32/` 中。发挥项 EX-04/05 的 PnP 位姿解算由 `tasks/yolov5_pnp_demo.cpp` 独立实现，复用 `YOLOV5Detector` 检测结果后调用 `cv::solvePnP`。演示程序和测试只依赖公开目标与头文件目录，不通过相对路径耦合内部布局。
+各模块集中于 `src/` 下按题目2/题目3分类，题目4保持在 `src/communication/` 与 `stm32/` 中。发挥项 EX-04/05 的 PnP 位姿解算由 `tasks/yolov5_pnp_demo.cpp` 独立实现，复用 `YOLOV5Detector` 检测结果后调用 `cv::solvePnP`。演示程序和测试只依赖公开目标与头文件目录，不通过相对路径耦合内部布局。
 
-STM32 固件工程通过 `stm32/Makefile` 支持 `arm-none-eabi-gcc` 命令行构建，`Core/Inc/` 中的 `frame_parser.h`、`uart_ring.h`、`ssd1306.h` 分别封装帧解析状态机、UART 环形缓冲和 OLED 文本驱动，与上位机 `communication/frame.hpp` 共享一致的 `#pragma pack(1)` payload 结构体定义。
+STM32 固件工程通过 `stm32/Makefile` 支持 `arm-none-eabi-gcc` 命令行构建，`Core/Inc/` 中的 `frame_parser.h`、`uart_ring.h`、`ssd1306.h` 分别封装帧解析状态机、UART 环形缓冲和 OLED 文本驱动，与上位机 `src/communication/frame.hpp` 共享一致的 `#pragma pack(1)` payload 结构体定义。
 
 ### 9.2 父子级 CMake
 
@@ -483,10 +485,10 @@ DetectionResult
 当前根 CMake 已使用 C++17，并按 OpenCV 是否存在决定是否构建视觉模块。工程已经按父子级 CMake 拆分：
 
 1. 根 `CMakeLists.txt` 只设置标准、查找依赖、定义选项并调用 `add_subdirectory`。
-2. `src/MyCamera/`、`src/MyArmorTraditional/`、`src/MyArmorYolo/`、`communication/`、`tasks/`、`tests/` 分别维护自己的 `CMakeLists.txt`。
+2. `src/MyCamera/`、`src/MyArmorTraditional/`、`src/MyArmorYolo/`、`src/MySerial/`、`src/communication/`、`tasks/`、`tests/` 分别维护自己的 `CMakeLists.txt`。
 3. 使用 `target_include_directories` 和 `target_link_libraries` 表达依赖。
 4. YOLOv5 通过 `YOLO_WITH_OPENVINO` 选项按需启用，启用时自动查找 OpenVINO 并复制运行时 DLL。
-5. 对 Windows/Ubuntu 的串口实现（`communication/mySerial.cpp`）使用 `#ifdef _WIN32` 条件编译。
+5. 对 Windows/Ubuntu 的串口实现（`src/MySerial/MySerial.cpp`）使用 `#ifdef _WIN32` 条件编译。
 6. 模型文件、配置文件通过运行参数传入，不把开发机绝对路径编译进程序。
 7. 构建目录必须位于 `learning/` 之外，例如 `build/` 或 `out/build/`。
 

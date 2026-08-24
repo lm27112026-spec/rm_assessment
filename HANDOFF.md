@@ -12,7 +12,7 @@
 5. YOLO demo 使用轻量卡尔曼跟踪器对目标进行短时预测。
 6. 在窗口中显示检测框、识别结果、帧率等 HUD 信息。
 7. 使用 YOLOv5 OpenVINO 模型完成题目3装甲板检测与跟随演示。
-8. 使用 `communication/` 中的 `mySerial` 和帧协议完成上位机串口封帧发送。
+8. 使用 `src/MySerial` 中的 `MySerial` 和 `src/communication/` 帧协议完成上位机串口封帧发送。
 9. 在无摄像头时使用 `demo.avi` 进行无界面冒烟测试。
 
 重要约束：`learning/` 目录是只读输入，本次实现没有修改其中任何文件。
@@ -42,10 +42,13 @@ rm_assessment/
 │  ├─ CMakeLists.txt
 │  ├─ yolov5.hpp/.cpp             YOLOv5 OpenVINO 推理封装
 │  └─ yolov5_utils.hpp/.cpp       letterbox、decode、NMS 等工具
-├─ communication/
+├─ src/communication/
 │  ├─ CMakeLists.txt
 │  ├─ frame.hpp/.cpp              0xAA + payload + 0xBB 帧协议
-│  └─ mySerial.hpp/.cpp           PC 端串口封装
+│  └─ tests/                      帧协议和回环测试
+├─ src/MySerial/
+│  ├─ CMakeLists.txt
+│  └─ MySerial.hpp/.cpp           PC 端串口封装
 ├─ stm32/                         下位机 UART/OLED 工程与说明
 ├─ tasks/
 │  ├─ CMakeLists.txt
