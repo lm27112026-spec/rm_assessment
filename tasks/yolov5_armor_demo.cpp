@@ -10,9 +10,10 @@
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
 
 #include "detection_tracker.hpp"
+#include "camera_exposure.hpp"
+#include "myCamera.hpp"
 #include "yolov5.hpp"
 
 namespace
@@ -120,33 +121,6 @@ std::string source_label(const std::string & source)
   return looks_like_integer(source) ? ("camera " + source) : source;
 }
 
-bool open_camera(cv::VideoCapture & capture, int preferred_index, int & opened_index)
-{
-  std::vector<int> indices = {preferred_index};
-  for (int index = 0; index <= 5; ++index) {
-    if (index != preferred_index) {
-      indices.push_back(index);
-    }
-  }
-
-#ifdef _WIN32
-  const std::vector<int> backends = {cv::CAP_MSMF};
-#else
-  const std::vector<int> backends = {cv::CAP_ANY};
-#endif
-
-  for (const int index : indices) {
-    for (const int backend : backends) {
-      capture.release();
-      if (capture.open(index, backend)) {
-        opened_index = index;
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 void draw_detection(cv::Mat & frame, const rm_assessment::yolov5::Detection & detection)
 {
   cv::rectangle(frame, detection.box, {0, 255, 0}, 2, cv::LINE_AA);
@@ -170,20 +144,15 @@ int main(int argc, char ** argv)
   rm_assessment::yolov5::YOLOV5Detector detector(options.model_path, options.device);
   rm_assessment::DetectionTracker tracker;
 
-  cv::VideoCapture capture;
-  if (looks_like_integer(options.source)) {
-    const int preferred_index = std::stoi(options.source);
-    int opened_index = preferred_index;
-    if (open_camera(capture, preferred_index, opened_index)) {
-      std::cout << "Opened camera " << opened_index << '\n';
-    }
-  } else {
-    capture.open(options.source);
-  }
+  io::myCamera camera(options.source);
 
-  if (!capture.isOpened()) {
+  if (!camera.isOpened()) {
     std::cerr << "Failed to open source: " << options.source << '\n';
     return 1;
+  }
+
+  if (looks_like_integer(options.source)) {
+    io::applySavedExposure(camera);
   }
 
   std::cout << "Source: " << source_label(options.source) << '\n';
@@ -205,7 +174,8 @@ int main(int argc, char ** argv)
     }
 
     cv::Mat frame;
-    if (!capture.read(frame) || frame.empty()) {
+    std::chrono::steady_clock::time_point timestamp;
+    if (!camera.read(frame, timestamp) || frame.empty()) {
       break;
     }
 

@@ -1,4 +1,4 @@
-add_library(mycamera myCamera.cpp)
+add_library(mycamera myCamera.cpp camera_exposure.cpp)
 target_include_directories(mycamera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(OpenCV_FOUND)

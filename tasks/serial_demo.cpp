@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include "detector.hpp"
 #include "frame.hpp"
 #include "img_tools.hpp"
+#include "camera_exposure.hpp"
 #include "myCamera.hpp"
 #include "mySerial.hpp"
 
@@ -139,6 +141,11 @@ int main(int argc, char ** argv)
   auto_aim::Detector detector(cfg.model_path);
 
   io::myCamera cam(cfg.video_source);
+  if (!cfg.video_source.empty() && std::all_of(cfg.video_source.begin(), cfg.video_source.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+      })) {
+    io::applySavedExposure(cam);
+  }
 
   cv::Mat frame;
   std::chrono::steady_clock::time_point timestamp;

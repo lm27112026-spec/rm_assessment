@@ -50,6 +50,11 @@ myCamera::~myCamera()
 #endif
 }
 
+bool myCamera::isOpened() const
+{
+  return opened_;
+}
+
 bool myCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   timestamp = std::chrono::steady_clock::now();
@@ -76,6 +81,66 @@ bool myCamera::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
   ++frame_index_;
   return true;
 #endif
+}
+
+bool myCamera::setFrameSize(int width, int height)
+{
+  width_ = width;
+  height_ = height;
+
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (!capture_.isOpened()) {
+    return false;
+  }
+  const bool width_set = capture_.set(cv::CAP_PROP_FRAME_WIDTH, width);
+  const bool height_set = capture_.set(cv::CAP_PROP_FRAME_HEIGHT, height);
+  return width_set && height_set;
+#else
+  return true;
+#endif
+}
+
+bool myCamera::setFPS(int fps)
+{
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (!capture_.isOpened()) {
+    return false;
+  }
+  return capture_.set(cv::CAP_PROP_FPS, fps);
+#else
+  (void)fps;
+  return true;
+#endif
+}
+
+double myCamera::getFrameWidth() const
+{
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (capture_.isOpened()) {
+    return capture_.get(cv::CAP_PROP_FRAME_WIDTH);
+  }
+#endif
+  return width_;
+}
+
+double myCamera::getFrameHeight() const
+{
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (capture_.isOpened()) {
+    return capture_.get(cv::CAP_PROP_FRAME_HEIGHT);
+  }
+#endif
+  return height_;
+}
+
+double myCamera::getFPS() const
+{
+#ifdef MY_CAMERA_HAS_OPENCV
+  if (capture_.isOpened()) {
+    return capture_.get(cv::CAP_PROP_FPS);
+  }
+#endif
+  return 0.0;
 }
 
 bool myCamera::setExposure(double exposure)

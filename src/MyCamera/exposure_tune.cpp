@@ -63,7 +63,7 @@ bool save_exposure(const std::string & output_path, double exposure)
   }
 
   out << "# Auto-saved by exposure_tune\n";
-  out << "# Value is written directly to cv::CAP_PROP_EXPOSURE.\n";
+  out << "# Value is requested through io::myCamera; most camera backends quantize it.\n";
   out << std::setprecision(10) << "exposure: " << exposure << '\n';
   return true;
 }

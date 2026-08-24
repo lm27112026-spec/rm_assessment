@@ -13,6 +13,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -20,8 +22,10 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
+#include <opencv2/video/tracking.hpp>
 
+#include "camera_exposure.hpp"
+#include "myCamera.hpp"
 #include "yolov5.hpp"
 
 namespace
@@ -52,6 +56,7 @@ struct DemoOptions
   bool big_armor = false;
   double axis_length = 0.05;
   double max_reproj_error = 40.0;
+  std::optional<double> exposure;
   std::size_t max_frames = 0U;
 };
 
@@ -140,6 +145,14 @@ DemoOptions parse_options(int argc, char ** argv)
       options.config_path = argv[++i];
       continue;
     }
+    if (argument == "--exposure") {
+      if (i + 1 >= argc) std::exit(1);
+      double exposure = 0.0;
+      if (parse_double(argv[++i], exposure)) {
+        options.exposure = exposure;
+      }
+      continue;
+    }
     if (argument == "--camera-matrix") {
       if (i + 1 >= argc) std::exit(1);
       options.camera_matrix_csv = argv[++i];
@@ -185,31 +198,6 @@ std::string format_fps(double fps)
 std::string source_label(const std::string & source)
 {
   return looks_like_integer(source) ? ("camera " + source) : source;
-}
-
-bool open_camera(cv::VideoCapture & capture, int preferred_index, int & opened_index)
-{
-  std::vector<int> indices = {preferred_index};
-  for (int index = 0; index <= 5; ++index) {
-    if (index != preferred_index) indices.push_back(index);
-  }
-
-#ifdef _WIN32
-  const std::vector<int> backends = {cv::CAP_MSMF};
-#else
-  const std::vector<int> backends = {cv::CAP_ANY};
-#endif
-
-  for (const int index : indices) {
-    for (const int backend : backends) {
-      capture.release();
-      if (capture.open(index, backend)) {
-        opened_index = index;
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 struct Intrinsics
@@ -302,6 +290,161 @@ struct PoseResult
   double roll_deg = 0.0;
 };
 
+struct MotionEstimate
+{
+  bool active = false;
+  cv::Vec3d observed_tvec{};
+  cv::Vec3d filtered_tvec{};
+  cv::Vec3d predicted_tvec{};
+  cv::Vec3d velocity{};
+  double speed = 0.0;
+  double dt = 0.0;
+  double prediction_horizon = 0.12;
+};
+
+class ArmorPoseObserverPredictor
+{
+public:
+  ArmorPoseObserverPredictor()
+  : measurement_(cv::Mat::zeros(3, 1, CV_32F))
+  {
+    configure();
+  }
+
+  bool initialized() const noexcept { return initialized_; }
+
+  cv::Vec3d expected_tvec() const
+  {
+    return {kalman_.statePost.at<float>(0), kalman_.statePost.at<float>(1), kalman_.statePost.at<float>(2)};
+  }
+
+  MotionEstimate update(
+    const PoseResult & pose, std::chrono::steady_clock::time_point timestamp,
+    double prediction_horizon = 0.12)
+  {
+    const double dt = compute_dt(timestamp);
+    if (!initialized_) {
+      bootstrap(pose.tvec, timestamp);
+    } else {
+      predict_step(dt);
+      correct_step(pose.tvec);
+      last_timestamp_ = timestamp;
+    }
+
+    missing_count_ = 0;
+    return make_estimate(pose.tvec, dt, prediction_horizon);
+  }
+
+  std::optional<MotionEstimate> predict_missing(
+    std::chrono::steady_clock::time_point timestamp, double prediction_horizon = 0.12)
+  {
+    if (!initialized_) return std::nullopt;
+
+    const double dt = compute_dt(timestamp);
+    predict_step(dt);
+    last_timestamp_ = timestamp;
+    if (++missing_count_ > kMaxMissingFrames) {
+      reset();
+      return std::nullopt;
+    }
+    return make_estimate(expected_tvec(), dt, prediction_horizon);
+  }
+
+private:
+  static constexpr int kMaxMissingFrames = 8;
+
+  void configure()
+  {
+    kalman_.init(6, 3, 0, CV_32F);
+    kalman_.transitionMatrix = cv::Mat::eye(6, 6, CV_32F);
+    kalman_.measurementMatrix = cv::Mat::zeros(3, 6, CV_32F);
+    kalman_.measurementMatrix.at<float>(0, 0) = 1.0F;
+    kalman_.measurementMatrix.at<float>(1, 1) = 1.0F;
+    kalman_.measurementMatrix.at<float>(2, 2) = 1.0F;
+    cv::setIdentity(kalman_.processNoiseCov, cv::Scalar::all(2e-3));
+    cv::setIdentity(kalman_.measurementNoiseCov, cv::Scalar::all(2e-2));
+    cv::setIdentity(kalman_.errorCovPost, cv::Scalar::all(1.0));
+    kalman_.statePost = cv::Mat::zeros(6, 1, CV_32F);
+    kalman_.statePre = cv::Mat::zeros(6, 1, CV_32F);
+  }
+
+  void reset()
+  {
+    initialized_ = false;
+    missing_count_ = 0;
+    configure();
+  }
+
+  double compute_dt(std::chrono::steady_clock::time_point timestamp) const
+  {
+    if (!initialized_) return 1.0 / 60.0;
+    const double raw_dt = std::chrono::duration<double>(timestamp - last_timestamp_).count();
+    return std::max(1e-3, std::min(0.2, raw_dt));
+  }
+
+  void set_transition_dt(double dt)
+  {
+    kalman_.transitionMatrix.at<float>(0, 3) = static_cast<float>(dt);
+    kalman_.transitionMatrix.at<float>(1, 4) = static_cast<float>(dt);
+    kalman_.transitionMatrix.at<float>(2, 5) = static_cast<float>(dt);
+  }
+
+  void bootstrap(const cv::Vec3d & tvec, std::chrono::steady_clock::time_point timestamp)
+  {
+    kalman_.statePost.at<float>(0) = static_cast<float>(tvec[0]);
+    kalman_.statePost.at<float>(1) = static_cast<float>(tvec[1]);
+    kalman_.statePost.at<float>(2) = static_cast<float>(tvec[2]);
+    kalman_.statePost.at<float>(3) = 0.0F;
+    kalman_.statePost.at<float>(4) = 0.0F;
+    kalman_.statePost.at<float>(5) = 0.0F;
+    kalman_.statePre = kalman_.statePost.clone();
+    last_timestamp_ = timestamp;
+    initialized_ = true;
+  }
+
+  void predict_step(double dt)
+  {
+    set_transition_dt(dt);
+    kalman_.predict();
+  }
+
+  void correct_step(const cv::Vec3d & tvec)
+  {
+    measurement_.at<float>(0) = static_cast<float>(tvec[0]);
+    measurement_.at<float>(1) = static_cast<float>(tvec[1]);
+    measurement_.at<float>(2) = static_cast<float>(tvec[2]);
+    kalman_.correct(measurement_);
+  }
+
+  MotionEstimate make_estimate(const cv::Vec3d & observed_tvec, double dt, double prediction_horizon) const
+  {
+    MotionEstimate estimate;
+    estimate.active = true;
+    estimate.observed_tvec = observed_tvec;
+    estimate.filtered_tvec = expected_tvec();
+    estimate.velocity = {
+      kalman_.statePost.at<float>(3), kalman_.statePost.at<float>(4), kalman_.statePost.at<float>(5)};
+    estimate.speed = cv::norm(estimate.velocity);
+    estimate.dt = dt;
+    estimate.prediction_horizon = prediction_horizon;
+    estimate.predicted_tvec = estimate.filtered_tvec + estimate.velocity * prediction_horizon;
+    return estimate;
+  }
+
+  cv::KalmanFilter kalman_;
+  cv::Mat measurement_;
+  bool initialized_ = false;
+  int missing_count_ = 0;
+  std::chrono::steady_clock::time_point last_timestamp_{};
+};
+
+struct FramePoseTarget
+{
+  rm_assessment::yolov5::Detection detection;
+  std::array<cv::Point2f, 4> ordered_corners{};
+  PoseResult pose;
+};
+
 std::array<cv::Point2f, 4> order_corners_tl_tr_br_bl(const std::array<cv::Point2f, 4> & corners)
 {
   std::vector<cv::Point2f> points(corners.begin(), corners.end());
@@ -374,10 +517,81 @@ PoseResult solve_armor_pose(
   return result;
 }
 
+std::optional<std::size_t> choose_observed_target(
+  const std::vector<FramePoseTarget> & targets, const ArmorPoseObserverPredictor & observer)
+{
+  std::optional<std::size_t> best_index;
+  double best_score = std::numeric_limits<double>::infinity();
+  const cv::Vec3d expected = observer.initialized() ? observer.expected_tvec() : cv::Vec3d{};
+
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    if (!targets[i].pose.valid) continue;
+
+    const double score = observer.initialized()
+      ? cv::norm(targets[i].pose.tvec - expected)
+      : -static_cast<double>(targets[i].detection.box.area());
+    if (score < best_score) {
+      best_score = score;
+      best_index = i;
+    }
+  }
+
+  return best_index;
+}
+
+cv::Point2f project_camera_point(
+  const cv::Vec3d & camera_point, const cv::Mat & camera_matrix, const cv::Mat & dist_coeffs)
+{
+  std::vector<cv::Point3f> object_points = {cv::Point3f(0.0F, 0.0F, 0.0F)};
+  std::vector<cv::Point2f> image_points;
+  cv::projectPoints(
+    object_points, cv::Vec3d(0.0, 0.0, 0.0), camera_point, camera_matrix, dist_coeffs, image_points);
+  return image_points.front();
+}
+
+void draw_motion_arrow(
+  cv::Mat & frame, const cv::Point2f & anchor, const MotionEstimate & motion, const cv::Mat & camera_matrix,
+  const cv::Mat & dist_coeffs)
+{
+  if (!motion.active || motion.speed < 1e-2) return;
+
+  const cv::Point2f projected_now = project_camera_point(motion.filtered_tvec, camera_matrix, dist_coeffs);
+  const cv::Point2f projected_next = project_camera_point(motion.predicted_tvec, camera_matrix, dist_coeffs);
+  if (!std::isfinite(projected_now.x) || !std::isfinite(projected_now.y) ||
+    !std::isfinite(projected_next.x) || !std::isfinite(projected_next.y)) {
+    return;
+  }
+
+  cv::Point2f direction = projected_next - projected_now;
+  double direction_norm = cv::norm(direction);
+  if (direction_norm < 1.0) {
+    direction = cv::Point2f(static_cast<float>(motion.velocity[0]), static_cast<float>(motion.velocity[1]));
+    direction_norm = cv::norm(direction);
+  }
+  if (direction_norm < 1e-6) return;
+
+  direction *= static_cast<float>(1.0 / direction_norm);
+  const float arrow_length = static_cast<float>(std::max(24.0, std::min(180.0, motion.speed * 180.0)));
+  const cv::Point2f end = anchor + direction * arrow_length;
+
+  cv::arrowedLine(frame, anchor, end, {0, 165, 255}, 5, cv::LINE_AA, 0, 0.28);
+  cv::circle(frame, anchor, 5, {0, 255, 255}, -1, cv::LINE_AA);
+  cv::circle(frame, end, 5, {0, 165, 255}, -1, cv::LINE_AA);
+
+  std::ostringstream speed_text;
+  speed_text << "motion " << std::fixed << std::setprecision(2) << motion.speed << " m/s";
+  cv::Point label_pos(
+    cvRound(end.x) + 8,
+    std::max(18, cvRound(end.y) - 8));
+  cv::putText(frame, speed_text.str(), label_pos, cv::FONT_HERSHEY_SIMPLEX, 0.5, {0, 0, 0}, 2, cv::LINE_AA);
+  cv::putText(frame, speed_text.str(), label_pos, cv::FONT_HERSHEY_SIMPLEX, 0.5, {0, 165, 255}, 1, cv::LINE_AA);
+}
+
 void draw_pose_target(
   cv::Mat & frame, const rm_assessment::yolov5::Detection & detection,
   const std::array<cv::Point2f, 4> & ordered_corners, const PoseResult & pose,
-  double axis_length, const cv::Mat & camera_matrix, const cv::Mat & dist_coeffs)
+  const std::optional<MotionEstimate> & motion, double axis_length, const cv::Mat & camera_matrix,
+  const cv::Mat & dist_coeffs)
 {
   // 1. 绘制绿色检测框
   cv::rectangle(frame, detection.box, {0, 255, 0}, 2, cv::LINE_AA);
@@ -401,8 +615,11 @@ void draw_pose_target(
 
   // 4. 当位姿解算成功时：绘制坐标轴，并在【左上方 y=76, y=102】绘制距离和姿态信息
   if (pose.valid) {
-    // 绘制中心坐标轴
+    // 坐标系贴当前 PnP 观测，避免滤波滞后；移动状态由独立箭头表达。
     cv::drawFrameAxes(frame, camera_matrix, dist_coeffs, pose.rvec, pose.tvec, axis_length, 2);
+    if (motion) {
+      draw_motion_arrow(frame, center, *motion, camera_matrix, dist_coeffs);
+    }
 
     // 【第 2 行：左上方绿色距离信息 (y = 76)】
     std::ostringstream dist_text;
@@ -418,6 +635,16 @@ void draw_pose_target(
              << pose.yaw_deg << "/" << pose.pitch_deg << "/" << pose.roll_deg << "deg";
     cv::putText(frame, ypr_text.str(), {12, 102}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 0, 0}, 2, cv::LINE_AA);
     cv::putText(frame, ypr_text.str(), {12, 102}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 255, 0}, 1, cv::LINE_AA);
+
+    if (motion) {
+      std::ostringstream motion_text;
+      motion_text << "observer xyz=" << std::fixed << std::setprecision(2)
+                  << motion->filtered_tvec[0] << "," << motion->filtered_tvec[1] << ","
+                  << motion->filtered_tvec[2] << "m  predictor dt="
+                  << std::setprecision(0) << motion->prediction_horizon * 1000.0 << "ms";
+      cv::putText(frame, motion_text.str(), {12, 128}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 0, 0}, 2, cv::LINE_AA);
+      cv::putText(frame, motion_text.str(), {12, 128}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 255, 255}, 1, cv::LINE_AA);
+    }
   } else {
     const int line_y = std::max(18, cvRound(detection.box.y) - 6);
     std::ostringstream label;
@@ -449,20 +676,19 @@ int main(int argc, char ** argv)
     const Intrinsics intrinsics = resolve_intrinsics(options);
     const double armor_width = options.big_armor ? kBigArmorWidth : kSmallArmorWidth;
 
-    cv::VideoCapture capture;
-    if (looks_like_integer(options.source)) {
-      const int preferred_index = std::stoi(options.source);
-      int opened_index = preferred_index;
-      if (open_camera(capture, preferred_index, opened_index)) {
-        std::cout << "Opened camera " << opened_index << '\n';
-      }
-    } else {
-      capture.open(options.source);
-    }
+    io::myCamera camera(options.source);
 
-    if (!capture.isOpened()) {
+    if (!camera.isOpened()) {
       std::cerr << "Failed to open source: " << options.source << '\n';
       return 1;
+    }
+
+    std::optional<double> camera_exposure = options.exposure;
+    if (!camera_exposure) {
+      camera_exposure = io::loadExposure();
+    }
+    if (looks_like_integer(options.source) && camera_exposure) {
+      io::reportExposure(*camera_exposure, io::applyExposure(camera, *camera_exposure));
     }
 
     std::cout << "Source: " << source_label(options.source) << '\n';
@@ -475,6 +701,7 @@ int main(int argc, char ** argv)
     std::size_t total_detections = 0U;
     std::size_t pose_solved = 0U;
     std::size_t pose_rejected = 0U;
+    ArmorPoseObserverPredictor pose_observer;
 
     const std::string window_name = "yolov5_pnp_demo";
     cv::namedWindow(window_name, cv::WINDOW_AUTOSIZE);
@@ -485,29 +712,47 @@ int main(int argc, char ** argv)
       }
 
       cv::Mat frame;
-      if (!capture.read(frame) || frame.empty()) {
+      std::chrono::steady_clock::time_point frame_timestamp;
+      if (!camera.read(frame, frame_timestamp) || frame.empty()) {
         break;
       }
 
+      const auto now = frame_timestamp;
       const auto detections = detector.detect(frame);
       total_detections += detections.size();
 
+      std::vector<FramePoseTarget> pose_targets;
+      pose_targets.reserve(detections.size());
       for (const auto & detection : detections) {
-        const std::array<cv::Point2f, 4> ordered = order_corners_tl_tr_br_bl(detection.corners);
-        const PoseResult pose = solve_armor_pose(
+        FramePoseTarget target;
+        target.detection = detection;
+        target.ordered_corners = order_corners_tl_tr_br_bl(detection.corners);
+        target.pose = solve_armor_pose(
           detection.corners, armor_width, kLightbarHeight, intrinsics.camera_matrix,
           intrinsics.dist_coeffs, options.max_reproj_error);
-        if (pose.valid) {
+        if (target.pose.valid) {
           ++pose_solved;
         } else {
           ++pose_rejected;
         }
-        draw_pose_target(
-          frame, detection, ordered, pose, options.axis_length, intrinsics.camera_matrix,
-          intrinsics.dist_coeffs);
+        pose_targets.push_back(target);
       }
 
-      const auto now = std::chrono::steady_clock::now();
+      std::optional<std::size_t> tracked_index = choose_observed_target(pose_targets, pose_observer);
+      std::optional<MotionEstimate> motion;
+      if (tracked_index) {
+        motion = pose_observer.update(pose_targets[*tracked_index].pose, now);
+      } else {
+        motion = pose_observer.predict_missing(now);
+      }
+
+      for (std::size_t i = 0; i < pose_targets.size(); ++i) {
+        const std::optional<MotionEstimate> target_motion = (tracked_index && i == *tracked_index) ? motion : std::nullopt;
+        draw_pose_target(
+          frame, pose_targets[i].detection, pose_targets[i].ordered_corners, pose_targets[i].pose,
+          target_motion, options.axis_length, intrinsics.camera_matrix, intrinsics.dist_coeffs);
+      }
+
       const double elapsed = std::chrono::duration<double>(now - last_tick).count();
       if (elapsed > 0.0) {
         fps = 1.0 / elapsed;

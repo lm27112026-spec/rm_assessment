@@ -14,11 +14,12 @@
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
 
 #include "armor.hpp"
 #include "detector.hpp"
 #include "img_tools.hpp"
+#include "camera_exposure.hpp"
+#include "myCamera.hpp"
 
 namespace
 {
@@ -183,35 +184,6 @@ std::string source_label(const std::string & source)
   return source;
 }
 
-bool open_camera(cv::VideoCapture & capture, int preferred_index, int & opened_index)
-{
-  std::vector<int> indices = {preferred_index};
-  for (int index = 0; index <= 5; ++index) {
-    if (index != preferred_index) {
-      indices.push_back(index);
-    }
-  }
-
-#ifdef _WIN32
-  // CAP_ANY (auto) is much faster than CAP_DSHOW on MinGW OpenCV
-  // (measured ~23fps vs ~10fps on the same camera); keep DSHOW as fallback.
-  const std::vector<int> backends = {cv::CAP_ANY, cv::CAP_DSHOW};
-#else
-  const std::vector<int> backends = {cv::CAP_ANY};
-#endif
-
-  for (const int index : indices) {
-    for (const int backend : backends) {
-      capture.release();
-      if (capture.open(index, backend)) {
-        opened_index = index;
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 struct DemoState
 {
   std::chrono::steady_clock::time_point last_tick = std::chrono::steady_clock::now();
@@ -228,21 +200,11 @@ int main(int argc, char ** argv)
 
   auto_aim::Detector detector(options.model_path);
 
-  cv::VideoCapture capture;
-  if (looks_like_integer(options.source)) {
-    const int preferred_index = std::stoi(options.source);
-    int opened_index = preferred_index;
-    if (open_camera(capture, preferred_index, opened_index)) {
-      options.source = std::to_string(opened_index);
-    }
-  } else {
-    capture.open(options.source);
-  }
+  io::myCamera camera(options.source);
 
-  if (!capture.isOpened()) {
+  if (!camera.isOpened()) {
     if (looks_like_integer(options.source)) {
-      std::cerr << "No available camera was found (checked indices 0-5).\n"
-                   "Check the camera privacy switch, Windows camera permissions, and Device Manager.\n";
+      std::cerr << "Failed to open camera: " << options.source << '\n';
     } else {
       std::cerr << "Failed to open source: " << options.source << '\n';
     }
@@ -252,16 +214,17 @@ int main(int argc, char ** argv)
   // Lower camera resolution / set fps on request (high-res capture/decoding is
   // usually what makes camera FPS drop; the detector itself runs at 100+ FPS).
   if (options.width > 0 && options.height > 0) {
-    capture.set(cv::CAP_PROP_FRAME_WIDTH, options.width);
-    capture.set(cv::CAP_PROP_FRAME_HEIGHT, options.height);
+    camera.setFrameSize(options.width, options.height);
   }
   if (options.fps > 0) {
-    capture.set(cv::CAP_PROP_FPS, options.fps);
+    camera.setFPS(options.fps);
   }
   if (looks_like_integer(options.source)) {
-    std::cout << "Camera: " << capture.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
-              << capture.get(cv::CAP_PROP_FRAME_HEIGHT) << " @ "
-              << capture.get(cv::CAP_PROP_FPS) << " fps\n";
+    io::applySavedExposure(camera);
+  }
+  if (looks_like_integer(options.source)) {
+    std::cout << "Camera: " << camera.getFrameWidth() << "x" << camera.getFrameHeight() << " @ "
+              << camera.getFPS() << " fps\n";
   }
 
   std::cout << "Opened source: " << options.source << '\n';
@@ -286,7 +249,8 @@ int main(int argc, char ** argv)
     }
 
     cv::Mat frame;
-    if (!capture.read(frame) || frame.empty()) {
+    std::chrono::steady_clock::time_point timestamp;
+    if (!camera.read(frame, timestamp) || frame.empty()) {
       break;  // 视频播放完毕或摄像头断开：停止并输出统计，避免回绕 seek 失败导致死循环
     }
 

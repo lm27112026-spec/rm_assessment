@@ -110,7 +110,13 @@ public:
   explicit myCamera(const std::string & source = "0");
   ~myCamera();
 
+  bool isOpened() const;
   bool read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
+  bool setFrameSize(int width, int height);
+  bool setFPS(int fps);
+  double getFrameWidth() const;
+  double getFrameHeight() const;
+  double getFPS() const;
   bool setExposure(double exposure);
   double getExposure() const;
 
