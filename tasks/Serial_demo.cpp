@@ -16,7 +16,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "detection_tracker.hpp"
+#include "DetectionTracker.hpp"
 #include "camera_exposure.hpp"
 #include "myCamera.hpp"
 #include "MySerial/MySerial.hpp"
