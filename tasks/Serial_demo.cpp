@@ -147,6 +147,13 @@ std::string source_label(const std::string & source)
   return looks_like_integer(source) ? ("camera " + source) : source;
 }
 
+std::string format_point(const cv::Point2f & point)
+{
+  std::ostringstream oss;
+  oss << "X:" << cvRound(point.x) << " Y:" << cvRound(point.y);
+  return oss.str();
+}
+
 void draw_detection(cv::Mat & frame, const rm_assessment::yolov5::Detection & detection)
 {
   cv::rectangle(frame, detection.box, {0, 255, 0}, 2, cv::LINE_AA);
@@ -272,6 +279,8 @@ int main(int argc, char ** argv)
       const cv::Point2f center = detection_center(*best_detection);
       (void)send_center_packet(*serial, center);
       cv::circle(frame, {cvRound(center.x), cvRound(center.y)}, 4, {0, 0, 255}, cv::FILLED, cv::LINE_AA);
+      cv::putText(frame, format_point(center), {std::min(cvRound(center.x) + 10, frame.cols - 180),
+        std::max(24, cvRound(center.y) - 10)}, cv::FONT_HERSHEY_SIMPLEX, 0.6, {0, 0, 255}, 2, cv::LINE_AA);
     }
 
     const auto now = std::chrono::steady_clock::now();
